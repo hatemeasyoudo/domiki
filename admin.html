@@ -584,6 +584,147 @@ function ServicesTab({ services, houses, reload }){
 }
 
 /* ---------------------------------------------------------------
+   Аналитика
+--------------------------------------------------------------- */
+const RU_MONTHS_SHORT = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+
+function guestsCount(b){
+  return Array.isArray(b.guests) ? b.guests.length : Number(b.guests || 0);
+}
+
+function AnalyticsTab({ bookings, houses, servicesById }){
+  const stats = useMemo(() => {
+    const confirmed = bookings.filter(b => b.status === 'confirmed');
+    const pending = bookings.filter(b => b.status === 'pending');
+
+    const revenueOf = b => Number(b.grand_total || 0) || Number(b.prepayment_amount || 0);
+
+    const totalEarned = confirmed.reduce((s,b) => s + revenueOf(b), 0);
+    const pendingExpected = pending.reduce((s,b) => s + revenueOf(b), 0);
+    const totalGuests = confirmed.reduce((s,b) => s + guestsCount(b), 0);
+    const avgCheck = confirmed.length ? Math.round(totalEarned / confirmed.length) : 0;
+
+    const byHouse = {};
+    confirmed.forEach(b => {
+      const k = b.house_id;
+      byHouse[k] = byHouse[k] || { revenue: 0, bookings: 0, guests: 0 };
+      byHouse[k].revenue += revenueOf(b);
+      byHouse[k].bookings += 1;
+      byHouse[k].guests += guestsCount(b);
+    });
+
+    const byService = {};
+    confirmed.forEach(b => {
+      bookingServiceBreakdown(b, servicesById).forEach(s => {
+        if(s.free) return;
+        byService[s.name] = byService[s.name] || { revenue: 0, count: 0, hasRevenue: false };
+        if(s.cost != null){ byService[s.name].revenue += Number(s.cost); byService[s.name].hasRevenue = true; }
+        byService[s.name].count += 1;
+      });
+    });
+
+    const byMonth = {};
+    confirmed.forEach(b => {
+      const d = new Date(b.created_at);
+      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      byMonth[key] = (byMonth[key] || 0) + revenueOf(b);
+    });
+    const monthKeys = Object.keys(byMonth).sort().slice(-12);
+    const maxMonth = Math.max(1, ...monthKeys.map(k => byMonth[k]));
+
+    return { totalEarned, pendingExpected, totalGuests, avgCheck, confirmedCount: confirmed.length, byHouse, byService, byMonth, monthKeys, maxMonth };
+  }, [bookings, servicesById]);
+
+  const houseName = id => (houses.find(h=>h.id===id) || {}).name || '—';
+  const houseRows = Object.entries(stats.byHouse).sort((a,b) => b[1].revenue - a[1].revenue);
+  const serviceRows = Object.entries(stats.byService).sort((a,b) => b[1].revenue - a[1].revenue);
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="card rounded-xl p-4">
+          <div className="text-[11.5px] muted mb-1.5">Заработано (подтверждено)</div>
+          <div className="text-[22px] font-serif text-brand-300">{stats.totalEarned} BYN</div>
+        </div>
+        <div className="card rounded-xl p-4">
+          <div className="text-[11.5px] muted mb-1.5">Ожидается (не подтверждено)</div>
+          <div className="text-[22px] font-serif">{stats.pendingExpected} BYN</div>
+        </div>
+        <div className="card rounded-xl p-4">
+          <div className="text-[11.5px] muted mb-1.5">Гостей нас посетило</div>
+          <div className="text-[22px] font-serif">{stats.totalGuests}</div>
+        </div>
+        <div className="card rounded-xl p-4">
+          <div className="text-[11.5px] muted mb-1.5">Средний чек</div>
+          <div className="text-[22px] font-serif">{stats.avgCheck} BYN</div>
+          <div className="text-[11px] muted mt-0.5">{stats.confirmedCount} подтверждённых броней</div>
+        </div>
+      </div>
+
+      {stats.monthKeys.length > 0 && (
+        <div className="card rounded-xl p-4">
+          <div className="text-[13px] font-medium mb-3">Доход по месяцам (подтверждённые брони)</div>
+          <div className="flex items-end gap-2.5 h-32">
+            {stats.monthKeys.map(k => {
+              const [y,m] = k.split('-');
+              const val = stats.byMonth[k];
+              const h = Math.max(4, Math.round((val / stats.maxMonth) * 100));
+              return (
+                <div key={k} className="flex-1 flex flex-col items-center justify-end gap-1.5 h-full">
+                  <div className="text-[10.5px] muted">{val}</div>
+                  <div className="w-full bg-brand-500/70 rounded-t-md" style={{height: `${h}%`}}></div>
+                  <div className="text-[10.5px] muted">{RU_MONTHS_SHORT[Number(m)-1]}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="card rounded-xl overflow-x-auto">
+          <div className="text-[13px] font-medium px-4 pt-4 pb-2">Доход по домикам</div>
+          <table>
+            <thead><tr><th>Домик</th><th>Броней</th><th>Гостей</th><th>Доход</th></tr></thead>
+            <tbody>
+              {houseRows.map(([id, v]) => (
+                <tr key={id}>
+                  <td>{houseName(id)}</td>
+                  <td>{v.bookings}</td>
+                  <td>{v.guests}</td>
+                  <td>{v.revenue} BYN</td>
+                </tr>
+              ))}
+              {houseRows.length===0 && <tr><td colSpan="4" className="text-center muted py-6">Пока нет подтверждённых броней</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="card rounded-xl overflow-x-auto">
+          <div className="text-[13px] font-medium px-4 pt-4 pb-2">Доход по услугам</div>
+          <table>
+            <thead><tr><th>Услуга</th><th>Заказана раз</th><th>Доход</th></tr></thead>
+            <tbody>
+              {serviceRows.map(([name, v]) => (
+                <tr key={name}>
+                  <td>{name}</td>
+                  <td>{v.count}</td>
+                  <td>{v.hasRevenue ? `${v.revenue} BYN` : '—'}</td>
+                </tr>
+              ))}
+              {serviceRows.length===0 && <tr><td colSpan="3" className="text-center muted py-6">Пока нет данных</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p className="text-[11px] muted">
+        Учитываются только подтверждённые брони. Доход по услуге показывает «—», если бронь была создана до появления подробного учёта стоимости услуг — по ней известно только, что услугу заказали, но не по какой цене.
+      </p>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
    Оболочка
 --------------------------------------------------------------- */
 /* ---------------------------------------------------------------
@@ -742,7 +883,7 @@ function Dashboard({ session, onLogout }){
         <KpiCards bookings={bookings}/>
 
         <div className="flex gap-2 mb-5">
-          {[['calendar','Календарь'],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
+          {[['calendar','Календарь'],['analytics','Аналитика'],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
             <button key={k} onClick={()=>setTab(k)} className={`text-[13px] px-4 py-2 rounded-lg border ${tab===k ? 'bg-brand-500 border-brand-500 text-white' : 'field'}`}>{l}</button>
           ))}
         </div>
@@ -756,6 +897,7 @@ function Dashboard({ session, onLogout }){
             </div>
           </div>
         )}
+        {tab==='analytics' && <AnalyticsTab bookings={bookings} houses={houses} servicesById={servicesById}/>}
         {tab==='houses' && <HousesTab houses={houses} services={services} reload={loadAll}/>}
         {tab==='services' && <ServicesTab services={services} houses={houses} reload={loadAll}/>}
       </div>
