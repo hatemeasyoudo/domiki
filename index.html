@@ -267,7 +267,8 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
   const [selectedServices, setSelectedServices] = useState([]);
   const [guestCount, setGuestCount] = useState(2);
   const [guestWeights, setGuestWeights] = useState([]); // [number|'', ...] — для подбора спасательных жилетов
-  const [perPerson, setPerPerson] = useState({}); // { [slug]: [bool, bool, ...] }
+  const [perPerson, setPerPerson] = useState({}); // { life_jacket: [bool, bool, ...] } — свой/арендованный жилет по гостям
+  const [serviceQty, setServiceQty] = useState({}); // { [slug]: number } — для остальных услуг "за человека" (например, бельё)
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -288,24 +289,39 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
       });
   }, [houseId]);
 
-  // Поддерживаем массив "нужна ли услуга этому гостю" для каждой выбранной услуги "за человека"
+  // Свой/арендованный жилет по каждому гостю (только для life_jacket)
   useEffect(() => {
     if(!house) return;
+    if(!selectedServices.includes('life_jacket')) return;
     setPerPerson(prev => {
+      const arr = prev['life_jacket'] ? [...prev['life_jacket']] : [];
+      while(arr.length < guestCount) arr.push(true); // по умолчанию — берёт в аренду
+      arr.length = guestCount;
+      return { ...prev, life_jacket: arr };
+    });
+  }, [selectedServices, guestCount, houseId]);
+
+  // Количество для остальных услуг "за человека" (например, комплекты постельного белья) —
+  // это просто число, которое гость вводит сам, по умолчанию равное числу гостей.
+  useEffect(() => {
+    if(!house) return;
+    setServiceQty(prev => {
       const next = { ...prev };
       selectedServices.forEach(slug => {
+        if(slug === 'life_jacket') return;
         const svc = servicesById[slug];
         if(!svc) return;
         const isPerPerson = svc.pricing_type === 'per_person' || svc.pricing_type === 'per_person_per_day';
         if(!isPerPerson) return;
-        const arr = next[slug] ? [...next[slug]] : [];
-        while(arr.length < guestCount) arr.push(true); // по умолчанию считаем, что услуга нужна всем
-        arr.length = guestCount;
-        next[slug] = arr;
+        if(next[slug] === undefined) next[slug] = guestCount;
       });
       return next;
     });
-  }, [selectedServices, guestCount, houseId]);
+  }, [selectedServices, houseId]);
+
+  function setServiceQtyValue(slug, val){
+    setServiceQty(prev => ({ ...prev, [slug]: Math.max(0, Number(val)||0) }));
+  }
 
   function pickDate(date){
     const iso = toISO(date);
@@ -332,7 +348,10 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
     setGuestWeights(prev => prev.map((w,idx) => idx===i ? val : w));
   }
 
-  const perPersonQty = Object.fromEntries(Object.entries(perPerson).map(([slug, arr]) => [slug, arr.filter(Boolean).length]));
+  const perPersonQty = {
+    ...(perPerson.life_jacket ? { life_jacket: perPerson.life_jacket.filter(Boolean).length } : {}),
+    ...serviceQty,
+  };
   const stayTotal = house ? computeStayTotal(house, range.checkIn, range.checkOut) : 0;
   const { total: servicesTotal, breakdown } = house
     ? computeServicesTotal(house, servicesById, selectedServices, days, perPersonQty)
@@ -491,34 +510,25 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
               if(!svc || !hs || hs.free) return null;
               const isPerPerson = svc.pricing_type === 'per_person' || svc.pricing_type === 'per_person_per_day';
               if(!isPerPerson) return null;
-              const flags = perPerson[slug] || [];
               return (
-                <div key={slug} className="mt-3 space-y-2">
-                  <div className="text-[12px] muted">Нужна ли услуга «{svc.name}» каждому гостю?</div>
-                  {Array.from({length: guestCount}).map((_,i) => (
-                    <div key={i} className="flex items-center justify-between field rounded-lg px-3 py-2 text-[12.5px]">
-                      <span>Гость {i+1}</span>
-                      <button type="button" onClick={() => togglePerPerson(slug, i)}
-                        className={`px-2.5 py-1 rounded-md text-[11.5px] ${flags[i] ? 'bg-brand-500/25 text-brand-300' : 'bg-white/5 muted'}`}>
-                        {flags[i] ? 'Нужна ✓' : 'Не нужна'}
-                      </button>
-                    </div>
-                  ))}
+                <div key={slug} className="mt-3 flex items-center justify-between field rounded-lg px-3 py-2.5 gap-3">
+                  <span className="text-[12.5px]">Сколько «{svc.name}» вам нужно?</span>
+                  <input type="number" min="0" value={serviceQty[slug] ?? guestCount}
+                    onChange={e=>setServiceQtyValue(slug, e.target.value)}
+                    className="field w-20 rounded-md px-2 py-1 text-[12.5px] text-right"/>
                 </div>
               );
             })}
 
+            {selectedServices.includes('life_jacket') && (
             <div className="mt-3 space-y-2">
               <div className="text-[12px] muted">Вес гостей, кг (для подбора спасательных жилетов, необязательно)</div>
-              {selectedServices.includes('life_jacket') && (
-                <div className="text-[11.5px] text-amber-400 bg-amber-400/10 border border-amber-400/25 rounded-lg px-3 py-2">
-                  Спасательный жилет — обязательное требование для нахождения на воде.
-                </div>
-              )}
+              <div className="text-[11.5px] text-amber-400 bg-amber-400/10 border border-amber-400/25 rounded-lg px-3 py-2">
+                Спасательный жилет — обязательное требование для нахождения на воде.
+              </div>
               {Array.from({length: guestCount}).map((_,i) => {
                 const ownJacketFlags = perPerson['life_jacket'] || [];
                 const needsRentedJacket = ownJacketFlags[i]; // true = арендует у нас, false = свой жилет
-                const showJacketToggle = selectedServices.includes('life_jacket');
                 return (
                   <div key={i} className="field rounded-lg px-3 py-2 text-[12.5px] space-y-2">
                     <div className="flex items-center justify-between gap-3">
@@ -527,19 +537,18 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
                         onChange={e=>setGuestWeight(i, e.target.value)}
                         className="field w-24 rounded-md px-2 py-1 text-[12.5px] text-right"/>
                     </div>
-                    {showJacketToggle && (
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="muted text-[11.5px]">Жилет</span>
-                        <button type="button" onClick={() => togglePerPerson('life_jacket', i)}
-                          className={`px-2.5 py-1 rounded-md text-[11.5px] ${!needsRentedJacket ? 'bg-brand-500/25 text-brand-300' : 'bg-white/5 muted'}`}>
-                          {needsRentedJacket ? 'Взять в аренду' : 'Свой жилет ✓'}
-                        </button>
-                      </div>
-                    )}
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="muted text-[11.5px]">Жилет</span>
+                      <button type="button" onClick={() => togglePerPerson('life_jacket', i)}
+                        className={`px-2.5 py-1 rounded-md text-[11.5px] ${!needsRentedJacket ? 'bg-brand-500/25 text-brand-300' : 'bg-white/5 muted'}`}>
+                        {needsRentedJacket ? 'Взять в аренду' : 'Свой жилет ✓'}
+                      </button>
+                    </div>
                   </div>
                 );
               })}
             </div>
+            )}
           </div>
 
           {days > 0 && (
