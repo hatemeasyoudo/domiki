@@ -480,11 +480,12 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
 
           <div>
             <label className="text-[12px] muted block mb-1.5">Сколько гостей?</label>
-            <input type="number" min="1" max={house.capacity + 2} value={guestCount}
+            <input type="number" min="1" value={guestCount}
               onChange={e=>setGuestCount(Math.max(1, Number(e.target.value)||1))}
               className="field w-28 rounded-lg px-3 py-2.5 text-[13.5px]"/>
 
             {selectedServices.map(slug => {
+              if(slug === 'life_jacket') return null; // для жилета — отдельный блок ниже, вместе с весом
               const svc = servicesById[slug];
               const hs = house.house_services.find(s => s.slug === slug);
               if(!svc || !hs || hs.free) return null;
@@ -509,14 +510,35 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
 
             <div className="mt-3 space-y-2">
               <div className="text-[12px] muted">Вес гостей, кг (для подбора спасательных жилетов, необязательно)</div>
-              {Array.from({length: guestCount}).map((_,i) => (
-                <div key={i} className="flex items-center justify-between field rounded-lg px-3 py-2 text-[12.5px] gap-3">
-                  <span>Гость {i+1}</span>
-                  <input type="number" min="0" placeholder="кг" value={guestWeights[i] ?? ''}
-                    onChange={e=>setGuestWeight(i, e.target.value)}
-                    className="field w-24 rounded-md px-2 py-1 text-[12.5px] text-right"/>
+              {selectedServices.includes('life_jacket') && (
+                <div className="text-[11.5px] text-amber-400 bg-amber-400/10 border border-amber-400/25 rounded-lg px-3 py-2">
+                  Спасательный жилет — обязательное требование для нахождения на воде.
                 </div>
-              ))}
+              )}
+              {Array.from({length: guestCount}).map((_,i) => {
+                const ownJacketFlags = perPerson['life_jacket'] || [];
+                const needsRentedJacket = ownJacketFlags[i]; // true = арендует у нас, false = свой жилет
+                const showJacketToggle = selectedServices.includes('life_jacket');
+                return (
+                  <div key={i} className="field rounded-lg px-3 py-2 text-[12.5px] space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Гость {i+1}</span>
+                      <input type="number" min="0" placeholder="кг" value={guestWeights[i] ?? ''}
+                        onChange={e=>setGuestWeight(i, e.target.value)}
+                        className="field w-24 rounded-md px-2 py-1 text-[12.5px] text-right"/>
+                    </div>
+                    {showJacketToggle && (
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="muted text-[11.5px]">Жилет</span>
+                        <button type="button" onClick={() => togglePerPerson('life_jacket', i)}
+                          className={`px-2.5 py-1 rounded-md text-[11.5px] ${!needsRentedJacket ? 'bg-brand-500/25 text-brand-300' : 'bg-white/5 muted'}`}>
+                          {needsRentedJacket ? 'Взять в аренду' : 'Свой жилет ✓'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
