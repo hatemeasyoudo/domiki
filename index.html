@@ -88,7 +88,11 @@ const { useState, useMemo, useEffect, useRef } = React;
 --------------------------------------------------------------- */
 const SUPABASE_URL = 'https://wbcsetdfwwkwnehiodjd.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_pMfUWEpLctVpXYubG4SNmg_vF4plRIn';
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// persistSession:false — окно бронирования всегда работает как анонимный посетитель,
+// даже если в этом же браузере/домене есть сохранённая сессия входа в админ-панель.
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false, storageKey: 'flot-booking-widget' }
+});
 
 const HOUSE_PHOTOS = {
   two_seater: [

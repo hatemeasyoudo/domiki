@@ -28,6 +28,8 @@
   ::-webkit-scrollbar-thumb{ background:rgba(148,163,184,0.35); border-radius:99px; }
   .card{ background:rgba(17,27,41,0.72); border:1px solid rgba(148,163,184,0.14); }
   html.light .card{ background:#fff; border:1px solid rgba(15,23,42,0.08); }
+  .modal-card{ background:#101a27; border:1px solid rgba(148,163,184,0.18); box-shadow:0 20px 60px rgba(0,0,0,0.45); }
+  html.light .modal-card{ background:#fff; border:1px solid rgba(15,23,42,0.1); box-shadow:0 20px 60px rgba(0,0,0,0.18); }
   .field{ background:rgba(255,255,255,0.04); border:1px solid rgba(148,163,184,0.18); color:inherit; }
   html.light .field{ background:#fff; border-color:rgba(15,23,42,0.12); }
   .field:focus{ outline:none; border-color:#17a892; box-shadow:0 0 0 3px rgba(23,168,146,0.18); }
@@ -173,8 +175,8 @@ function BookingDetailModal({ booking, houses, servicesById, onClose, onSaved })
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto" onClick={onClose}>
-      <div className="card rounded-2xl p-5 w-full max-w-lg my-8" onClick={e=>e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 flex items-start md:items-center justify-center p-4 z-50 overflow-y-auto" onClick={onClose}>
+      <div className="modal-card rounded-2xl p-5 w-full max-w-lg my-6 max-h-[88vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
         <div className="flex items-center justify-between mb-1">
           <div className="text-[16px] font-serif">Заявка</div>
           <Badge status={status}/>
@@ -195,9 +197,9 @@ function BookingDetailModal({ booking, houses, servicesById, onClose, onSaved })
         {breakdown.length>0 && (
           <div className="mb-4">
             <div className="text-[12px] muted mb-1.5">Доп. услуги</div>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-col gap-1.5">
               {breakdown.map((s,i) => (
-                <span key={i} className="text-[11.5px] px-2.5 py-1 rounded-md border field">
+                <span key={i} className="text-[12px] px-2.5 py-1.5 rounded-md border field">
                   {s.name}{s.free ? ' · Включено' : (s.cost != null ? ` · ${s.cost} BYN` : '')}
                 </span>
               ))}
@@ -247,9 +249,8 @@ function BookingDetailModal({ booking, houses, servicesById, onClose, onSaved })
   );
 }
 
-function BookingsTab({ bookings, houses, servicesById, reload }){
+function BookingsTab({ bookings, houses, servicesById, onOpenBooking }){
   const [filter, setFilter] = useState('all');
-  const [selected, setSelected] = useState(null);
 
   const houseName = id => (houses.find(h=>h.id===id) || {}).name || '—';
   const filtered = filter==='all' ? bookings : bookings.filter(b=>b.status===filter);
@@ -271,7 +272,7 @@ function BookingsTab({ bookings, houses, servicesById, reload }){
           </tr></thead>
           <tbody>
             {filtered.map(b => (
-              <tr key={b.id} className="clickable" onClick={()=>setSelected(b)}>
+              <tr key={b.id} className="clickable" onClick={()=>onOpenBooking(b)}>
                 <td>{houseName(b.house_id)}</td>
                 <td>{b.guest_name}</td>
                 <td>{b.phone}</td>
@@ -292,14 +293,6 @@ function BookingsTab({ bookings, houses, servicesById, reload }){
           </tbody>
         </table>
       </div>
-
-      {selected && (
-        <BookingDetailModal
-          booking={selected} houses={houses} servicesById={servicesById}
-          onClose={()=>setSelected(null)}
-          onSaved={()=>{ setSelected(null); reload(); }}
-        />
-      )}
     </div>
   );
 }
@@ -358,7 +351,7 @@ function HouseEditor({ house, services, onSaved, onCancel }){
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto" onClick={onCancel}>
-      <div className="card rounded-2xl p-5 w-full max-w-lg my-8" onClick={e=>e.stopPropagation()}>
+      <div className="modal-card rounded-2xl p-5 w-full max-w-lg my-6 max-h-[88vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
         <div className="text-[15px] font-serif mb-4">{house ? 'Редактировать домик' : 'Новый домик'}</div>
         <div className="space-y-3">
           <div>
@@ -599,7 +592,7 @@ function ServicesTab({ services, houses, reload }){
 const RU_MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 const RU_WEEKDAYS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 
-function AdminCalendar({ bookings, houses, servicesById }){
+function AdminCalendar({ bookings, houses, servicesById, onOpenBooking }){
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
@@ -674,7 +667,7 @@ function AdminCalendar({ bookings, houses, servicesById }){
             {selectedBookings.length===0 && <div className="text-[12.5px] muted">В этот день все домики свободны.</div>}
             <div className="space-y-3">
               {selectedBookings.map(b => (
-                <div key={b.id} className="field rounded-lg p-3">
+                <div key={b.id} onClick={()=>onOpenBooking(b)} className="field rounded-lg p-3 cursor-pointer hover:border-brand-500/60 transition">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[13px] font-medium">{houseName(b.house_id)}</span>
                     <Badge status={b.status}/>
@@ -701,6 +694,7 @@ function Dashboard({ session, onLogout }){
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(null);
+  const [selectedBooking, setSelectedBooking] = useState(null);
   const servicesById = useMemo(() => Object.fromEntries(services.map(s => [s.slug, s])), [services]);
 
   async function loadAll(){
@@ -755,16 +749,24 @@ function Dashboard({ session, onLogout }){
 
         {tab==='calendar' && (
           <div className="space-y-6">
-            <AdminCalendar bookings={bookings} houses={houses} servicesById={servicesById}/>
+            <AdminCalendar bookings={bookings} houses={houses} servicesById={servicesById} onOpenBooking={setSelectedBooking}/>
             <div>
               <div className="text-[15px] font-serif mb-3">Брони</div>
-              <BookingsTab bookings={bookings} houses={houses} servicesById={servicesById} reload={loadAll}/>
+              <BookingsTab bookings={bookings} houses={houses} servicesById={servicesById} onOpenBooking={setSelectedBooking}/>
             </div>
           </div>
         )}
         {tab==='houses' && <HousesTab houses={houses} services={services} reload={loadAll}/>}
         {tab==='services' && <ServicesTab services={services} houses={houses} reload={loadAll}/>}
       </div>
+
+      {selectedBooking && (
+        <BookingDetailModal
+          booking={selectedBooking} houses={houses} servicesById={servicesById}
+          onClose={()=>setSelectedBooking(null)}
+          onSaved={()=>{ setSelectedBooking(null); loadAll(); }}
+        />
+      )}
     </div>
   );
 }
