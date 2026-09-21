@@ -139,6 +139,13 @@ function calculatePrepayment(house, checkIn, checkOut){
   if(!house || days <= 0) return 0;
   return days >= 2 ? house.prepayment_amount * days : house.prepayment_amount;
 }
+// Определяем услугу "спасательный жилет" не только по строгому slug 'life_jacket',
+// но и по названию — на случай, если в базе случайно оказался дубликат услуги
+// под другим slug (например, кто-то добавил её ещё раз через админку).
+function isLifeJacketService(svc){
+  return !!svc && (svc.slug === 'life_jacket' || /жилет/i.test(svc.name || ''));
+}
+
 function computeServicesTotal(house, servicesById, selectedSlugs, days, perPersonQty){
   let total = 0;
   const breakdown = [];
@@ -274,6 +281,9 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
 
   const house = houses.find(h => h.id === houseId) || null;
   const days = daysCount(range.checkIn, range.checkOut);
+  // Slug фактически выбранной услуги-жилета — определяем по данным, а не хардкодим,
+  // чтобы не ломаться, если в базе окажется дубликат этой услуги под другим slug.
+  const lifeJacketSlug = selectedServices.find(slug => isLifeJacketService(servicesById[slug])) || null;
 
   useEffect(() => {
     if(!house) return;
@@ -289,17 +299,16 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
       });
   }, [houseId]);
 
-  // Свой/арендованный жилет по каждому гостю (только для life_jacket)
+  // Свой/арендованный жилет по каждому гостю
   useEffect(() => {
-    if(!house) return;
-    if(!selectedServices.includes('life_jacket')) return;
+    if(!house || !lifeJacketSlug) return;
     setPerPerson(prev => {
-      const arr = prev['life_jacket'] ? [...prev['life_jacket']] : [];
+      const arr = prev[lifeJacketSlug] ? [...prev[lifeJacketSlug]] : [];
       while(arr.length < guestCount) arr.push(true); // по умолчанию — берёт в аренду
       arr.length = guestCount;
-      return { ...prev, life_jacket: arr };
+      return { ...prev, [lifeJacketSlug]: arr };
     });
-  }, [selectedServices, guestCount, houseId]);
+  }, [selectedServices, guestCount, houseId, lifeJacketSlug]);
 
   // Количество для остальных услуг "за человека" (например, комплекты постельного белья) —
   // это просто число, которое гость вводит сам, по умолчанию равное числу гостей.
@@ -308,7 +317,7 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
     setServiceQty(prev => {
       const next = { ...prev };
       selectedServices.forEach(slug => {
-        if(slug === 'life_jacket') return;
+        if(slug === lifeJacketSlug) return;
         const svc = servicesById[slug];
         if(!svc) return;
         const isPerPerson = svc.pricing_type === 'per_person' || svc.pricing_type === 'per_person_per_day';
@@ -317,7 +326,7 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
       });
       return next;
     });
-  }, [selectedServices, houseId]);
+  }, [selectedServices, houseId, lifeJacketSlug]);
 
   function setServiceQtyValue(slug, val){
     setServiceQty(prev => ({ ...prev, [slug]: Math.max(0, Number(val)||0) }));
@@ -349,7 +358,7 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
   }
 
   const perPersonQty = {
-    ...(perPerson.life_jacket ? { life_jacket: perPerson.life_jacket.filter(Boolean).length } : {}),
+    ...(lifeJacketSlug && perPerson[lifeJacketSlug] ? { [lifeJacketSlug]: perPerson[lifeJacketSlug].filter(Boolean).length } : {}),
     ...serviceQty,
   };
   const stayTotal = house ? computeStayTotal(house, range.checkIn, range.checkOut) : 0;
@@ -386,7 +395,7 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
       house_id: house.id, houseName: house.name,
       guest_name: name, phone, telegram,
       check_in: range.checkIn, check_out: range.checkOut,
-      services: selectedServices, guests: guestCount, guestWeights, lifeJacketQty: perPersonQty['life_jacket'] || 0,
+      services: selectedServices, guests: guestCount, guestWeights, lifeJacketQty: (lifeJacketSlug && perPersonQty[lifeJacketSlug]) || 0,
       prepayment_amount: prepayment, stayTotal, servicesTotal, grandTotal, days, breakdown,
     });
   }
@@ -493,7 +502,7 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
                         {hs.free ? <span className="text-brand-300">Включено</span> : `${svc.price} BYN${PRICING_SUFFIX[svc.pricing_type] || ''}`}
                       </span>
                     </label>
-                    {hs.slug === 'life_jacket' && (
+                    {isLifeJacketService(svc) && (
                       <div className="mt-1.5 text-[11.5px] text-amber-400 bg-amber-400/10 border border-amber-400/25 rounded-lg px-3 py-2">
                         Спасательный жилет — обязательное требование для нахождения на воде.
                       </div>
@@ -511,8 +520,8 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
               className="field w-28 rounded-lg px-3 py-2.5 text-[13.5px]"/>
 
             {selectedServices.map(slug => {
-              if(slug === 'life_jacket') return null; // для жилета — отдельный блок ниже, вместе с весом
               const svc = servicesById[slug];
+              if(isLifeJacketService(svc)) return null; // для жилета — отдельный блок ниже, вместе с весом
               const hs = house.house_services.find(s => s.slug === slug);
               if(!svc || !hs || hs.free) return null;
               const isPerPerson = svc.pricing_type === 'per_person' || svc.pricing_type === 'per_person_per_day';
@@ -527,14 +536,14 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
               );
             })}
 
-            {selectedServices.includes('life_jacket') && (
+            {lifeJacketSlug && (
             <div className="mt-3 space-y-2">
               <div className="text-[12px] muted">Вес гостей, кг (для подбора спасательных жилетов, необязательно)</div>
               <div className="text-[11.5px] text-amber-400 bg-amber-400/10 border border-amber-400/25 rounded-lg px-3 py-2">
                 Спасательный жилет — обязательное требование для нахождения на воде.
               </div>
               {Array.from({length: guestCount}).map((_,i) => {
-                const ownJacketFlags = perPerson['life_jacket'] || [];
+                const ownJacketFlags = perPerson[lifeJacketSlug] || [];
                 const needsRentedJacket = ownJacketFlags[i]; // true = арендует у нас, false = свой жилет
                 return (
                   <div key={i} className="field rounded-lg px-3 py-2 text-[12.5px] space-y-2">
@@ -546,7 +555,7 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
                     </div>
                     <div className="flex items-center justify-between gap-3">
                       <span className="muted text-[11.5px]">Жилет</span>
-                      <button type="button" onClick={() => togglePerPerson('life_jacket', i)}
+                      <button type="button" onClick={() => togglePerPerson(lifeJacketSlug, i)}
                         className={`px-2.5 py-1 rounded-md text-[11.5px] ${!needsRentedJacket ? 'bg-brand-500/25 text-brand-300' : 'bg-white/5 muted'}`}>
                         {needsRentedJacket ? 'Взять в аренду' : 'Свой жилет ✓'}
                       </button>
