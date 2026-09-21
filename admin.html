@@ -251,13 +251,36 @@ function BookingDetailModal({ booking, houses, servicesById, onClose, onSaved })
 
 function BookingsTab({ bookings, houses, servicesById, onOpenBooking }){
   const [filter, setFilter] = useState('all');
+  const [query, setQuery] = useState('');
+  const [houseFilter, setHouseFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   const houseName = id => (houses.find(h=>h.id===id) || {}).name || '—';
-  const filtered = filter==='all' ? bookings : bookings.filter(b=>b.status===filter);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const qDigits = q.replace(/\D/g, '');
+    return bookings.filter(b => {
+      if(filter !== 'all' && b.status !== filter) return false;
+      if(houseFilter !== 'all' && b.house_id !== houseFilter) return false;
+      if(dateFrom && b.check_out < dateFrom) return false;
+      if(dateTo && b.check_in > dateTo) return false;
+      if(q){
+        const name = (b.guest_name || '').toLowerCase();
+        const tg = (b.telegram || '').toLowerCase();
+        const phoneDigits = (b.phone || '').replace(/\D/g, '');
+        const matchesText = name.includes(q) || tg.includes(q);
+        const matchesPhone = qDigits.length > 0 && phoneDigits.includes(qDigits);
+        if(!matchesText && !matchesPhone) return false;
+      }
+      return true;
+    });
+  }, [bookings, filter, houseFilter, dateFrom, dateTo, query]);
 
   return (
     <div>
-      <div className="flex flex-wrap gap-2 mb-4">
+      <div className="flex flex-wrap gap-2 mb-3">
         {['all','pending','confirmed','rejected'].map(f => (
           <button key={f} onClick={()=>setFilter(f)}
             className={`text-[12px] px-3 py-1.5 rounded-full border ${filter===f ? 'bg-brand-500 border-brand-500 text-white' : 'field'}`}>
@@ -265,6 +288,24 @@ function BookingsTab({ bookings, houses, servicesById, onOpenBooking }){
           </button>
         ))}
       </div>
+      <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+        <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Поиск: имя, телефон, Telegram"
+          className="field rounded-lg px-3 py-2 text-[12.5px] md:col-span-2"/>
+        <select value={houseFilter} onChange={e=>setHouseFilter(e.target.value)} className="field rounded-lg px-3 py-2 text-[12.5px]">
+          <option value="all">Все домики</option>
+          {houses.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+        </select>
+        <div className="flex gap-2">
+          <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} className="field rounded-lg px-2 py-2 text-[12px] flex-1" title="Даты от"/>
+          <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} className="field rounded-lg px-2 py-2 text-[12px] flex-1" title="Даты до"/>
+        </div>
+      </div>
+      {(query || houseFilter!=='all' || dateFrom || dateTo) && (
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-[11.5px] muted">Найдено: {filtered.length}</div>
+          <button onClick={()=>{ setQuery(''); setHouseFilter('all'); setDateFrom(''); setDateTo(''); }} className="text-[11.5px] text-brand-300 hover:underline">Сбросить фильтры</button>
+        </div>
+      )}
       <div className="card rounded-xl overflow-x-auto">
         <table>
           <thead><tr>
@@ -882,10 +923,13 @@ function Dashboard({ session, onLogout }){
 
         <KpiCards bookings={bookings}/>
 
-        <div className="flex gap-2 mb-5">
-          {[['calendar','Календарь'],['analytics','Аналитика'],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
-            <button key={k} onClick={()=>setTab(k)} className={`text-[13px] px-4 py-2 rounded-lg border ${tab===k ? 'bg-brand-500 border-brand-500 text-white' : 'field'}`}>{l}</button>
-          ))}
+        <div className="flex items-center justify-between gap-2 mb-5">
+          <div className="flex gap-2">
+            {[['calendar','Календарь'],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
+              <button key={k} onClick={()=>setTab(k)} className={`text-[13px] px-4 py-2 rounded-lg border ${tab===k ? 'bg-brand-500 border-brand-500 text-white' : 'field'}`}>{l}</button>
+            ))}
+          </div>
+          <button onClick={()=>setTab('analytics')} className={`text-[13px] px-4 py-2 rounded-lg border ${tab==='analytics' ? 'bg-brand-500 border-brand-500 text-white' : 'field'}`}>Аналитика</button>
         </div>
 
         {tab==='calendar' && (
