@@ -39,6 +39,8 @@
   th{ text-align:left; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#8ea0b5; padding:8px 10px; white-space:nowrap; }
   td{ padding:9px 10px; font-size:12.5px; border-top:1px solid rgba(148,163,184,0.12); vertical-align:top; }
   tr.clickable:hover{ background:rgba(23,168,146,0.06); cursor:pointer; }
+  select option{ background-color:#16212e; color:#e7edf3; }
+  .receipt-thumb{ width:100%; max-height:220px; object-fit:contain; border-radius:10px; border:1px solid rgba(148,163,184,0.2); background:#0b1420; }
 </style>
 </head>
 <body>
@@ -177,7 +179,13 @@ function BookingsTab({ bookings, houses, reload }){
                 <td>{b.phone}</td>
                 <td>{b.check_in} → {b.check_out}</td>
                 <td>{b.prepayment_amount} BYN</td>
-                <td>{b.receipt_screenshot ? <a href={b.receipt_screenshot} target="_blank" onClick={e=>e.stopPropagation()} className="text-brand-400 underline">чек</a> : '—'}</td>
+                <td>
+                  {b.receipt_screenshot
+                    ? <a href={b.receipt_screenshot} target="_blank" onClick={e=>e.stopPropagation()}>
+                        <img src={b.receipt_screenshot} className="w-10 h-10 object-cover rounded border border-white/15"/>
+                      </a>
+                    : '—'}
+                </td>
                 <td><Badge status={b.status}/></td>
                 <td className="muted">{new Date(b.created_at).toLocaleDateString('ru-RU')}</td>
               </tr>
@@ -199,7 +207,11 @@ function BookingsTab({ bookings, houses, reload }){
               <div className="flex justify-between"><span className="muted">Предоплата</span><b>{selected.prepayment_amount} BYN</b></div>
               <div className="flex justify-between"><span className="muted">Гостей с жилетом</span><b>{selected.life_jacket_count || 0}</b></div>
               {selected.services && selected.services.length>0 && <div className="flex justify-between"><span className="muted">Услуги</span><b>{selected.services.join(', ')}</b></div>}
-              {selected.receipt_screenshot && <div><a href={selected.receipt_screenshot} target="_blank" className="text-brand-400 underline">Открыть чек</a></div>}
+              {selected.receipt_screenshot && (
+                <a href={selected.receipt_screenshot} target="_blank">
+                  <img src={selected.receipt_screenshot} className="receipt-thumb"/>
+                </a>
+              )}
             </div>
             <label className="text-[12px] muted block mb-1.5">Статус</label>
             <select value={status} onChange={e=>setStatus(e.target.value)} className="field w-full rounded-lg px-3 py-2.5 text-[13px] mb-3">
@@ -399,23 +411,51 @@ function HousesTab({ houses, services, reload }){
 /* ---------------------------------------------------------------
    Услуги
 --------------------------------------------------------------- */
-function ServiceRow({ s, onSaved }){
+function ServiceRow({ s, houses, onSaved }){
   const [form, setForm] = useState(s);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const dirty = JSON.stringify(form) !== JSON.stringify(s);
+
+  async function renameSlugEverywhere(oldSlug, newSlug){
+    const affected = houses.filter(h => h.house_services.some(hs => hs.slug === oldSlug));
+    for(const h of affected){
+      const updated = h.house_services.map(hs => hs.slug === oldSlug ? { ...hs, slug: newSlug } : hs);
+      await sb.from('houses').update({ house_services: updated }).eq('id', h.id);
+    }
+  }
 
   async function save(){
     setSaving(true);
-    await sb.from('services').update({
-      name: form.name, price: Number(form.price), pricing_type: form.pricing_type, active: form.active,
+    const newSlug = form.slug.trim();
+    if(newSlug !== s.slug){
+      await renameSlugEverywhere(s.slug, newSlug);
+    }
+    const { error } = await sb.from('services').update({
+      slug: newSlug, name: form.name, price: Number(form.price), pricing_type: form.pricing_type, active: form.active,
     }).eq('id', s.id);
     setSaving(false);
+    if(error){ alert('Не удалось сохранить: ' + error.message); return; }
+    onSaved();
+  }
+
+  async function removeService(){
+    if(!confirm(`Удалить услугу «${s.name}»? Она также будет убрана из всех домиков.`)) return;
+    setDeleting(true);
+    const affected = houses.filter(h => h.house_services.some(hs => hs.slug === s.slug));
+    for(const h of affected){
+      const updated = h.house_services.filter(hs => hs.slug !== s.slug);
+      await sb.from('houses').update({ house_services: updated }).eq('id', h.id);
+    }
+    const { error } = await sb.from('services').delete().eq('id', s.id);
+    setDeleting(false);
+    if(error){ alert('Не удалось удалить: ' + error.message); return; }
     onSaved();
   }
 
   return (
     <tr>
-      <td className="font-mono text-[11px] muted">{s.slug}</td>
+      <td><input value={form.slug} onChange={e=>setForm(f=>({...f,slug:e.target.value}))} className="field rounded px-2 py-1 text-[11.5px] font-mono w-28"/></td>
       <td><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} className="field rounded px-2 py-1 text-[12.5px] w-40"/></td>
       <td><input type="number" value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value}))} className="field rounded px-2 py-1 text-[12.5px] w-20"/></td>
       <td>
@@ -427,12 +467,15 @@ function ServiceRow({ s, onSaved }){
         </select>
       </td>
       <td><input type="checkbox" checked={form.active} onChange={e=>setForm(f=>({...f,active:e.target.checked}))} className="accent-teal-500"/></td>
-      <td>{dirty && <button onClick={save} disabled={saving} className="text-[11.5px] bg-brand-500 hover:bg-brand-400 text-white rounded px-2.5 py-1">{saving?'…':'Сохранить'}</button>}</td>
+      <td className="flex gap-1.5">
+        {dirty && <button onClick={save} disabled={saving} className="text-[11.5px] bg-brand-500 hover:bg-brand-400 text-white rounded px-2.5 py-1">{saving?'…':'Сохранить'}</button>}
+        <button onClick={removeService} disabled={deleting} className="text-[11.5px] bg-red-500/15 hover:bg-red-500/25 text-red-400 rounded px-2.5 py-1">{deleting?'…':'Удалить'}</button>
+      </td>
     </tr>
   );
 }
 
-function ServicesTab({ services, reload }){
+function ServicesTab({ services, houses, reload }){
   const [newOpen, setNewOpen] = useState(false);
   const [slug, setSlug] = useState('');
   const [name, setName] = useState('');
@@ -470,7 +513,7 @@ function ServicesTab({ services, reload }){
       <div className="card rounded-xl overflow-x-auto">
         <table>
           <thead><tr><th>ID</th><th>Название</th><th>Цена</th><th>Тип</th><th>Активна</th><th></th></tr></thead>
-          <tbody>{services.map(s => <ServiceRow key={s.id} s={s} onSaved={reload}/>)}</tbody>
+          <tbody>{services.map(s => <ServiceRow key={s.id} s={s} houses={houses} onSaved={reload}/>)}</tbody>
         </table>
       </div>
     </div>
@@ -480,6 +523,107 @@ function ServicesTab({ services, reload }){
 /* ---------------------------------------------------------------
    Оболочка
 --------------------------------------------------------------- */
+/* ---------------------------------------------------------------
+   Календарь всех броней
+--------------------------------------------------------------- */
+const RU_MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+const RU_WEEKDAYS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+
+function AdminCalendar({ bookings, houses }){
+  const today = new Date();
+  const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [viewMonth, setViewMonth] = useState(today.getMonth());
+  const [selectedDate, setSelectedDate] = useState(null);
+
+  function toISO(d){ return d.toISOString().slice(0,10); }
+  function parseISO(s){ const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d); }
+  const houseName = id => (houses.find(h=>h.id===id) || {}).name || '—';
+
+  function bookingsOnDate(date){
+    const iso = toISO(date);
+    return bookings.filter(b => b.status !== 'rejected' && iso >= b.check_in && iso < b.check_out);
+  }
+
+  const first = new Date(viewYear, viewMonth, 1);
+  const startOffset = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(viewYear, viewMonth+1, 0).getDate();
+  const cells = [];
+  for(let i=0;i<startOffset;i++) cells.push(null);
+  for(let d=1; d<=daysInMonth; d++) cells.push(new Date(viewYear, viewMonth, d));
+
+  function changeMonth(delta){
+    let m = viewMonth + delta, y = viewYear;
+    if(m<0){ m=11; y--; } if(m>11){ m=0; y++; }
+    setViewMonth(m); setViewYear(y); setSelectedDate(null);
+  }
+
+  const selectedBookings = selectedDate ? bookingsOnDate(selectedDate) : [];
+
+  return (
+    <div className="grid md:grid-cols-[1fr,340px] gap-5">
+      <div className="card rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <button onClick={()=>changeMonth(-1)} className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center">‹</button>
+          <div className="font-serif text-[16px]">{RU_MONTHS[viewMonth]} {viewYear}</div>
+          <button onClick={()=>changeMonth(1)} className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center">›</button>
+        </div>
+        <div className="grid grid-cols-7 gap-1 text-[11px] muted mb-1">
+          {RU_WEEKDAYS.map(w => <div key={w} className="text-center py-1">{w}</div>)}
+        </div>
+        <div className="grid grid-cols-7 gap-1">
+          {cells.map((date,i) => {
+            if(!date) return <div key={i}></div>;
+            const dayBookings = bookingsOnDate(date);
+            const hasPending = dayBookings.some(b=>b.status==='pending');
+            const hasConfirmed = dayBookings.some(b=>b.status==='confirmed');
+            const iso = toISO(date);
+            const isSelected = selectedDate && toISO(selectedDate)===iso;
+            return (
+              <button key={i} onClick={()=>setSelectedDate(date)}
+                className={`rounded-lg py-2 flex flex-col items-center gap-1 text-[12.5px] ${isSelected ? 'ring-2 ring-brand-500' : 'hover:bg-white/10'}`}>
+                <span>{date.getDate()}</span>
+                <span className="flex gap-0.5 h-1.5">
+                  {hasConfirmed && <i className="w-1.5 h-1.5 rounded-full bg-brand-500 inline-block"></i>}
+                  {hasPending && <i className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block"></i>}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex gap-4 mt-4 text-[11px] muted">
+          <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded-full bg-brand-500 inline-block"></i>Подтверждена</span>
+          <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block"></i>Ожидает</span>
+        </div>
+      </div>
+
+      <div className="card rounded-xl p-4">
+        {!selectedDate && <div className="text-[13px] muted text-center py-10">Выберите день в календаре</div>}
+        {selectedDate && (
+          <div>
+            <div className="text-[14px] font-serif mb-3">{selectedDate.toLocaleDateString('ru-RU', { day:'numeric', month:'long' })}</div>
+            {selectedBookings.length===0 && <div className="text-[12.5px] muted">В этот день все домики свободны.</div>}
+            <div className="space-y-3">
+              {selectedBookings.map(b => (
+                <div key={b.id} className="field rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[13px] font-medium">{houseName(b.house_id)}</span>
+                    <Badge status={b.status}/>
+                  </div>
+                  <div className="text-[12px] muted mb-1">{b.guest_name} · {b.phone}</div>
+                  <div className="text-[11.5px] muted">{b.check_in} → {b.check_out} · {b.prepayment_amount} BYN</div>
+                  {b.services && b.services.length>0 && (
+                    <div className="text-[11.5px] muted mt-1">Услуги: {b.services.join(', ')}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ session, onLogout }){
   const [tab, setTab] = useState('bookings');
   const [bookings, setBookings] = useState([]);
@@ -533,14 +677,15 @@ function Dashboard({ session, onLogout }){
         <KpiCards bookings={bookings}/>
 
         <div className="flex gap-2 mb-5">
-          {[['bookings','Брони'],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
+          {[['bookings','Брони'],['calendar','Календарь'],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
             <button key={k} onClick={()=>setTab(k)} className={`text-[13px] px-4 py-2 rounded-lg border ${tab===k ? 'bg-brand-500 border-brand-500 text-white' : 'field'}`}>{l}</button>
           ))}
         </div>
 
         {tab==='bookings' && <BookingsTab bookings={bookings} houses={houses} reload={loadAll}/>}
+        {tab==='calendar' && <AdminCalendar bookings={bookings} houses={houses}/>}
         {tab==='houses' && <HousesTab houses={houses} services={services} reload={loadAll}/>}
-        {tab==='services' && <ServicesTab services={services} reload={loadAll}/>}
+        {tab==='services' && <ServicesTab services={services} houses={houses} reload={loadAll}/>}
       </div>
     </div>
   );
