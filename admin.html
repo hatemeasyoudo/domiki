@@ -19,6 +19,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
   :root{ color-scheme: dark; }
   html,body{ height:100%; }
@@ -43,12 +44,13 @@
   tr.clickable:hover{ background:rgba(23,168,146,0.06); cursor:pointer; }
   select option{ background-color:#16212e; color:#e7edf3; }
   .receipt-thumb{ width:100%; max-height:220px; object-fit:contain; border-radius:10px; border:1px solid rgba(148,163,184,0.2); background:#0b1420; }
+  .num{ font-family:'Golos Text', system-ui, sans-serif; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; letter-spacing:-0.01em; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 
 const SUPABASE_URL = 'https://wbcsetdfwwkwnehiodjd.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_pMfUWEpLctVpXYubG4SNmg_vF4plRIn';
@@ -128,7 +130,7 @@ function KpiCards({ bookings }){
       {cards.map(c => (
         <div key={c.label} className="card rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2"><span className={`w-2.5 h-2.5 rounded-full ${c.dot}`}></span><span className="text-[11.5px] muted">{c.label}</span></div>
-          <div className="text-[24px] font-serif">{c.value}</div>
+          <div className="text-[24px] num font-semibold">{c.value}</div>
           {c.sub && <div className="text-[11px] muted mt-0.5">{c.sub}</div>}
         </div>
       ))}
@@ -480,9 +482,28 @@ function HouseEditor({ house, services, onSaved, onCancel }){
 function HousesTab({ houses, services, reload }){
   const [editing, setEditing] = useState(null);
   const [showNew, setShowNew] = useState(false);
+  const [copying, setCopying] = useState(null);
 
   async function toggleActive(h){
     await sb.from('houses').update({ active: !h.active }).eq('id', h.id);
+    reload();
+  }
+
+  async function duplicateHouse(h){
+    setCopying(h.id);
+    const payload = {
+      name: `${h.name} (копия)`, type: h.type, capacity: h.capacity,
+      prepayment_amount: h.prepayment_amount,
+      check_in_time: h.check_in_time, check_out_time: h.check_out_time,
+      weekday_price: h.weekday_price, weekend_price: h.weekend_price,
+      features: h.features || [], house_services: h.house_services || [],
+      warning_note: h.warning_note || null, footer_note: h.footer_note || null,
+      active: false, // копия скрыта, пока её не проверят и не опубликуют
+      sort_order: (h.sort_order || 0) + 1,
+    };
+    const { error } = await sb.from('houses').insert(payload);
+    setCopying(null);
+    if(error){ alert('Не удалось скопировать: ' + error.message); return; }
     reload();
   }
 
@@ -499,9 +520,10 @@ function HousesTab({ houses, services, reload }){
               {!h.active && <span className="text-[10.5px] px-2 py-0.5 rounded-full border border-red-500/30 bg-red-500/15 text-red-400">скрыт</span>}
             </div>
             <div className="text-[12px] muted mb-3">до {h.capacity} гостей · будни {h.weekday_price} / выходные {h.weekend_price} BYN · предоплата {h.prepayment_amount}/сутки</div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button onClick={()=>setEditing(h)} className="field rounded-lg px-3 py-1.5 text-[12px]">Редактировать</button>
               <button onClick={()=>toggleActive(h)} className="field rounded-lg px-3 py-1.5 text-[12px]">{h.active ? 'Скрыть' : 'Показать'}</button>
+              <button onClick={()=>duplicateHouse(h)} disabled={copying===h.id} className="field rounded-lg px-3 py-1.5 text-[12px]">{copying===h.id ? 'Копирую…' : 'Копировать'}</button>
             </div>
           </div>
         ))}
@@ -633,6 +655,37 @@ function guestsCount(b){
   return Array.isArray(b.guests) ? b.guests.length : Number(b.guests || 0);
 }
 
+const CHART_COLORS = ['#17a892','#5ad9c2','#f5b942','#f2784b','#7aa8f5','#c084fc','#f472b6','#94a3b8'];
+
+Chart.defaults.font.family = "'Golos Text', system-ui, sans-serif";
+Chart.defaults.color = '#8ea0b5';
+
+function ChartCanvas({ type, data, options, height }){
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  const dataKey = JSON.stringify(data);
+  const optionsKey = JSON.stringify(options || {});
+
+  useEffect(() => {
+    if(!canvasRef.current) return;
+    chartRef.current = new Chart(canvasRef.current, {
+      type, data,
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#8ea0b5', font: { size: 11.5 } } } },
+        scales: type === 'doughnut' ? {} : {
+          x: { grid: { color: 'rgba(148,163,184,0.12)' }, ticks: { color: '#8ea0b5', font: { size: 11 } } },
+          y: { grid: { color: 'rgba(148,163,184,0.12)' }, ticks: { color: '#8ea0b5', font: { size: 11 } }, beginAtZero: true },
+        },
+        ...options,
+      },
+    });
+    return () => { chartRef.current && chartRef.current.destroy(); };
+  }, [dataKey, optionsKey, type]);
+
+  return <div style={{ height: height || 220 }}><canvas ref={canvasRef}></canvas></div>;
+}
+
 function AnalyticsTab({ bookings, houses, servicesById }){
   const stats = useMemo(() => {
     const confirmed = bookings.filter(b => b.status === 'confirmed');
@@ -679,25 +732,39 @@ function AnalyticsTab({ bookings, houses, servicesById }){
   const houseName = id => (houses.find(h=>h.id===id) || {}).name || '—';
   const houseRows = Object.entries(stats.byHouse).sort((a,b) => b[1].revenue - a[1].revenue);
   const serviceRows = Object.entries(stats.byService).sort((a,b) => b[1].revenue - a[1].revenue);
+  const serviceChartRows = serviceRows.filter(([,v]) => v.hasRevenue).slice(0, 8);
+
+  const monthChartData = {
+    labels: stats.monthKeys.map(k => `${RU_MONTHS_SHORT[Number(k.split('-')[1])-1]} ${k.split('-')[0]}`),
+    datasets: [{ label: 'Доход, BYN', data: stats.monthKeys.map(k => stats.byMonth[k]), backgroundColor: '#17a892', borderRadius: 6, maxBarThickness: 36 }],
+  };
+  const houseChartData = {
+    labels: houseRows.map(([id]) => houseName(id)),
+    datasets: [{ label: 'Доход, BYN', data: houseRows.map(([,v]) => v.revenue), backgroundColor: CHART_COLORS, borderRadius: 6 }],
+  };
+  const serviceChartData = {
+    labels: serviceChartRows.map(([name]) => name),
+    datasets: [{ data: serviceChartRows.map(([,v]) => v.revenue), backgroundColor: CHART_COLORS, borderWidth: 0 }],
+  };
 
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="card rounded-xl p-4">
           <div className="text-[11.5px] muted mb-1.5">Заработано (подтверждено)</div>
-          <div className="text-[22px] font-serif text-brand-300">{stats.totalEarned} BYN</div>
+          <div className="text-[22px] num font-semibold text-brand-300">{stats.totalEarned} BYN</div>
         </div>
         <div className="card rounded-xl p-4">
           <div className="text-[11.5px] muted mb-1.5">Ожидается (не подтверждено)</div>
-          <div className="text-[22px] font-serif">{stats.pendingExpected} BYN</div>
+          <div className="text-[22px] num font-semibold">{stats.pendingExpected} BYN</div>
         </div>
         <div className="card rounded-xl p-4">
           <div className="text-[11.5px] muted mb-1.5">Гостей нас посетило</div>
-          <div className="text-[22px] font-serif">{stats.totalGuests}</div>
+          <div className="text-[22px] num font-semibold">{stats.totalGuests}</div>
         </div>
         <div className="card rounded-xl p-4">
           <div className="text-[11.5px] muted mb-1.5">Средний чек</div>
-          <div className="text-[22px] font-serif">{stats.avgCheck} BYN</div>
+          <div className="text-[22px] num font-semibold">{stats.avgCheck} BYN</div>
           <div className="text-[11px] muted mt-0.5">{stats.confirmedCount} подтверждённых броней</div>
         </div>
       </div>
@@ -705,22 +772,26 @@ function AnalyticsTab({ bookings, houses, servicesById }){
       {stats.monthKeys.length > 0 && (
         <div className="card rounded-xl p-4">
           <div className="text-[13px] font-medium mb-3">Доход по месяцам (подтверждённые брони)</div>
-          <div className="flex items-end gap-2.5 h-32">
-            {stats.monthKeys.map(k => {
-              const [y,m] = k.split('-');
-              const val = stats.byMonth[k];
-              const h = Math.max(4, Math.round((val / stats.maxMonth) * 100));
-              return (
-                <div key={k} className="flex-1 flex flex-col items-center justify-end gap-1.5 h-full">
-                  <div className="text-[10.5px] muted">{val}</div>
-                  <div className="w-full bg-brand-500/70 rounded-t-md" style={{height: `${h}%`}}></div>
-                  <div className="text-[10.5px] muted">{RU_MONTHS_SHORT[Number(m)-1]}</div>
-                </div>
-              );
-            })}
-          </div>
+          <ChartCanvas type="bar" data={monthChartData} height={240}/>
         </div>
       )}
+
+      <div className="grid md:grid-cols-2 gap-4">
+        {houseRows.length > 0 && (
+          <div className="card rounded-xl p-4">
+            <div className="text-[13px] font-medium mb-3">Доход по домикам</div>
+            <ChartCanvas type="bar" data={houseChartData}
+              options={{ indexAxis: 'y', plugins: { legend: { display: false } } }} height={Math.max(140, houseRows.length * 54)}/>
+          </div>
+        )}
+        {serviceChartRows.length > 0 && (
+          <div className="card rounded-xl p-4">
+            <div className="text-[13px] font-medium mb-3">Доход по услугам (топ-8)</div>
+            <ChartCanvas type="doughnut" data={serviceChartData}
+              options={{ plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 11 } } } } }} height={240}/>
+          </div>
+        )}
+      </div>
 
       <div className="grid md:grid-cols-2 gap-4">
         <div className="card rounded-xl overflow-x-auto">
@@ -731,9 +802,9 @@ function AnalyticsTab({ bookings, houses, servicesById }){
               {houseRows.map(([id, v]) => (
                 <tr key={id}>
                   <td>{houseName(id)}</td>
-                  <td>{v.bookings}</td>
-                  <td>{v.guests}</td>
-                  <td>{v.revenue} BYN</td>
+                  <td className="num">{v.bookings}</td>
+                  <td className="num">{v.guests}</td>
+                  <td className="num">{v.revenue} BYN</td>
                 </tr>
               ))}
               {houseRows.length===0 && <tr><td colSpan="4" className="text-center muted py-6">Пока нет подтверждённых броней</td></tr>}
@@ -749,8 +820,8 @@ function AnalyticsTab({ bookings, houses, servicesById }){
               {serviceRows.map(([name, v]) => (
                 <tr key={name}>
                   <td>{name}</td>
-                  <td>{v.count}</td>
-                  <td>{v.hasRevenue ? `${v.revenue} BYN` : '—'}</td>
+                  <td className="num">{v.count}</td>
+                  <td className="num">{v.hasRevenue ? `${v.revenue} BYN` : '—'}</td>
                 </tr>
               ))}
               {serviceRows.length===0 && <tr><td colSpan="3" className="text-center muted py-6">Пока нет данных</td></tr>}
