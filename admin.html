@@ -137,24 +137,122 @@ function KpiCards({ bookings }){
 /* ---------------------------------------------------------------
    Брони
 --------------------------------------------------------------- */
-function BookingsTab({ bookings, houses, reload }){
+const PRICING_SUFFIX = { per_stay:'', per_day:' / сутки', per_person:' / чел.', per_person_per_day:' / чел. в сутки' };
+
+// Разбивка услуг брони для отображения администратору: если в брони уже сохранён
+// подробный services_breakdown (с русскими названиями) — используем его,
+// иначе (старые брони) собираем разбивку из массива slug'ов через справочник услуг.
+function bookingServiceBreakdown(b, servicesById){
+  if(b.services_breakdown && b.services_breakdown.length>0) return b.services_breakdown;
+  return (b.services || []).map(slug => {
+    const svc = servicesById[slug];
+    return svc ? { name: svc.name, cost: null, free: false } : { name: slug, cost: null, free: false };
+  });
+}
+
+function BookingDetailModal({ booking, houses, servicesById, onClose, onSaved }){
+  const [status, setStatus] = useState(booking.status);
+  const [note, setNote] = useState(booking.admin_note || '');
+  const [saving, setSaving] = useState('');
+  const houseName = id => (houses.find(h=>h.id===id) || {}).name || '—';
+  const breakdown = bookingServiceBreakdown(booking, servicesById);
+  const guests = booking.guests || [];
+
+  async function setStatusAndSave(newStatus){
+    setSaving(newStatus);
+    const { error } = await sb.from('bookings').update({ status: newStatus, admin_note: note }).eq('id', booking.id);
+    setSaving('');
+    if(!error){ setStatus(newStatus); onSaved(); }
+  }
+
+  async function saveNoteOnly(){
+    setSaving('note');
+    const { error } = await sb.from('bookings').update({ admin_note: note }).eq('id', booking.id);
+    setSaving('');
+    if(!error) onSaved();
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto" onClick={onClose}>
+      <div className="card rounded-2xl p-5 w-full max-w-lg my-8" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-[16px] font-serif">Заявка</div>
+          <Badge status={status}/>
+        </div>
+        <div className="text-[11.5px] muted mb-4">Создана {new Date(booking.created_at).toLocaleString('ru-RU')}</div>
+
+        <div className="space-y-1.5 text-[12.5px] mb-4">
+          <div className="flex justify-between"><span className="muted">Домик</span><b>{houseName(booking.house_id)}</b></div>
+          <div className="flex justify-between"><span className="muted">Полная стоимость</span><b>{booking.grand_total ? `${booking.grand_total} BYN` : '—'}</b></div>
+          <div className="flex justify-between"><span className="muted">Предоплата</span><b>{booking.prepayment_amount} BYN</b></div>
+          <div className="flex justify-between"><span className="muted">Заезд</span><b>{booking.check_in}</b></div>
+          <div className="flex justify-between"><span className="muted">Выезд</span><b>{booking.check_out}</b></div>
+          <div className="flex justify-between"><span className="muted">Имя клиента</span><b>{booking.guest_name}</b></div>
+          <div className="flex justify-between"><span className="muted">Телефон</span><b>{booking.phone}</b></div>
+          {booking.telegram && <div className="flex justify-between"><span className="muted">Telegram</span><b>{booking.telegram}</b></div>}
+        </div>
+
+        {breakdown.length>0 && (
+          <div className="mb-4">
+            <div className="text-[12px] muted mb-1.5">Доп. услуги</div>
+            <div className="flex flex-wrap gap-1.5">
+              {breakdown.map((s,i) => (
+                <span key={i} className="text-[11.5px] px-2.5 py-1 rounded-md border field">
+                  {s.name}{s.free ? ' · Включено' : (s.cost != null ? ` · ${s.cost} BYN` : '')}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {guests.length>0 && (
+          <div className="mb-4">
+            <div className="text-[12px] muted mb-1.5">Гости (для жилетов)</div>
+            <div className="space-y-1">
+              {guests.map((g,i) => (
+                <div key={i} className="flex justify-between text-[12.5px] field rounded-lg px-3 py-1.5">
+                  <span>Гость {i+1}{g.name ? `: ${g.name}` : ''}</span>
+                  <span className="muted">{g.weight ? `${g.weight} кг` : 'вес не указан'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {booking.receipt_screenshot && (
+          <div className="mb-4">
+            <div className="text-[12px] muted mb-1.5">Скриншот чека</div>
+            <a href={booking.receipt_screenshot} target="_blank">
+              <img src={booking.receipt_screenshot} className="receipt-thumb"/>
+            </a>
+          </div>
+        )}
+
+        <label className="text-[12px] muted block mb-1.5">Заметка администратора</label>
+        <textarea value={note} onChange={e=>setNote(e.target.value)} rows="2" className="field w-full rounded-lg px-3 py-2.5 text-[13px] mb-4"/>
+
+        <div className="flex gap-2">
+          <button onClick={saveNoteOnly} disabled={!!saving} className="flex-1 field rounded-lg py-2.5 text-[13px] flex items-center justify-center gap-2">
+            {saving==='note' && <span className="spinner"></span>} Сохранить заметку
+          </button>
+          <button onClick={()=>setStatusAndSave('rejected')} disabled={!!saving} className="flex-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg py-2.5 text-[13px] font-medium flex items-center justify-center gap-2">
+            {saving==='rejected' && <span className="spinner"></span>} Отклонить
+          </button>
+          <button onClick={()=>setStatusAndSave('confirmed')} disabled={!!saving} className="flex-1 bg-brand-500 hover:bg-brand-400 text-white rounded-lg py-2.5 text-[13px] font-medium flex items-center justify-center gap-2">
+            {saving==='confirmed' && <span className="spinner"></span>} Подтвердить
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BookingsTab({ bookings, houses, servicesById, reload }){
   const [filter, setFilter] = useState('all');
   const [selected, setSelected] = useState(null);
-  const [status, setStatus] = useState('');
-  const [note, setNote] = useState('');
-  const [saving, setSaving] = useState(false);
 
   const houseName = id => (houses.find(h=>h.id===id) || {}).name || '—';
   const filtered = filter==='all' ? bookings : bookings.filter(b=>b.status===filter);
-
-  function openBooking(b){ setSelected(b); setStatus(b.status); setNote(b.admin_note || ''); }
-
-  async function save(){
-    setSaving(true);
-    const { error } = await sb.from('bookings').update({ status, admin_note: note }).eq('id', selected.id);
-    setSaving(false);
-    if(!error){ setSelected(null); reload(); }
-  }
 
   return (
     <div>
@@ -173,7 +271,7 @@ function BookingsTab({ bookings, houses, reload }){
           </tr></thead>
           <tbody>
             {filtered.map(b => (
-              <tr key={b.id} className="clickable" onClick={()=>openBooking(b)}>
+              <tr key={b.id} className="clickable" onClick={()=>setSelected(b)}>
                 <td>{houseName(b.house_id)}</td>
                 <td>{b.guest_name}</td>
                 <td>{b.phone}</td>
@@ -196,39 +294,11 @@ function BookingsTab({ bookings, houses, reload }){
       </div>
 
       {selected && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" onClick={()=>setSelected(null)}>
-          <div className="card rounded-2xl p-5 w-full max-w-md" onClick={e=>e.stopPropagation()}>
-            <div className="text-[15px] font-serif mb-3">{houseName(selected.house_id)}</div>
-            <div className="space-y-1.5 text-[12.5px] mb-4">
-              <div className="flex justify-between"><span className="muted">Гость</span><b>{selected.guest_name}</b></div>
-              <div className="flex justify-between"><span className="muted">Телефон</span><b>{selected.phone}</b></div>
-              {selected.telegram && <div className="flex justify-between"><span className="muted">Telegram</span><b>{selected.telegram}</b></div>}
-              <div className="flex justify-between"><span className="muted">Даты</span><b>{selected.check_in} → {selected.check_out}</b></div>
-              <div className="flex justify-between"><span className="muted">Предоплата</span><b>{selected.prepayment_amount} BYN</b></div>
-              <div className="flex justify-between"><span className="muted">Гостей с жилетом</span><b>{selected.life_jacket_count || 0}</b></div>
-              {selected.services && selected.services.length>0 && <div className="flex justify-between"><span className="muted">Услуги</span><b>{selected.services.join(', ')}</b></div>}
-              {selected.receipt_screenshot && (
-                <a href={selected.receipt_screenshot} target="_blank">
-                  <img src={selected.receipt_screenshot} className="receipt-thumb"/>
-                </a>
-              )}
-            </div>
-            <label className="text-[12px] muted block mb-1.5">Статус</label>
-            <select value={status} onChange={e=>setStatus(e.target.value)} className="field w-full rounded-lg px-3 py-2.5 text-[13px] mb-3">
-              <option value="pending">Ожидает</option>
-              <option value="confirmed">Подтверждена</option>
-              <option value="rejected">Отклонена</option>
-            </select>
-            <label className="text-[12px] muted block mb-1.5">Заметка администратора</label>
-            <textarea value={note} onChange={e=>setNote(e.target.value)} rows="2" className="field w-full rounded-lg px-3 py-2.5 text-[13px] mb-4"/>
-            <div className="flex gap-2">
-              <button onClick={()=>setSelected(null)} className="flex-1 field rounded-lg py-2.5 text-[13px]">Отмена</button>
-              <button onClick={save} disabled={saving} className="flex-1 bg-brand-500 hover:bg-brand-400 text-white rounded-lg py-2.5 text-[13px] font-medium flex items-center justify-center gap-2">
-                {saving && <span className="spinner"></span>} Сохранить
-              </button>
-            </div>
-          </div>
-        </div>
+        <BookingDetailModal
+          booking={selected} houses={houses} servicesById={servicesById}
+          onClose={()=>setSelected(null)}
+          onSaved={()=>{ setSelected(null); reload(); }}
+        />
       )}
     </div>
   );
@@ -529,7 +599,7 @@ function ServicesTab({ services, houses, reload }){
 const RU_MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 const RU_WEEKDAYS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 
-function AdminCalendar({ bookings, houses }){
+function AdminCalendar({ bookings, houses, servicesById }){
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
@@ -611,8 +681,8 @@ function AdminCalendar({ bookings, houses }){
                   </div>
                   <div className="text-[12px] muted mb-1">{b.guest_name} · {b.phone}</div>
                   <div className="text-[11.5px] muted">{b.check_in} → {b.check_out} · {b.prepayment_amount} BYN</div>
-                  {b.services && b.services.length>0 && (
-                    <div className="text-[11.5px] muted mt-1">Услуги: {b.services.join(', ')}</div>
+                  {bookingServiceBreakdown(b, servicesById).length>0 && (
+                    <div className="text-[11.5px] muted mt-1">Услуги: {bookingServiceBreakdown(b, servicesById).map(s=>s.name).join(', ')}</div>
                   )}
                 </div>
               ))}
@@ -625,12 +695,13 @@ function AdminCalendar({ bookings, houses }){
 }
 
 function Dashboard({ session, onLogout }){
-  const [tab, setTab] = useState('bookings');
+  const [tab, setTab] = useState('calendar');
   const [bookings, setBookings] = useState([]);
   const [houses, setHouses] = useState([]);
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(null);
+  const servicesById = useMemo(() => Object.fromEntries(services.map(s => [s.slug, s])), [services]);
 
   async function loadAll(){
     const [{ data: adm }, { data: bk }, { data: hs }, { data: sv }] = await Promise.all([
@@ -677,13 +748,20 @@ function Dashboard({ session, onLogout }){
         <KpiCards bookings={bookings}/>
 
         <div className="flex gap-2 mb-5">
-          {[['bookings','Брони'],['calendar','Календарь'],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
+          {[['calendar','Календарь'],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
             <button key={k} onClick={()=>setTab(k)} className={`text-[13px] px-4 py-2 rounded-lg border ${tab===k ? 'bg-brand-500 border-brand-500 text-white' : 'field'}`}>{l}</button>
           ))}
         </div>
 
-        {tab==='bookings' && <BookingsTab bookings={bookings} houses={houses} reload={loadAll}/>}
-        {tab==='calendar' && <AdminCalendar bookings={bookings} houses={houses}/>}
+        {tab==='calendar' && (
+          <div className="space-y-6">
+            <AdminCalendar bookings={bookings} houses={houses} servicesById={servicesById}/>
+            <div>
+              <div className="text-[15px] font-serif mb-3">Брони</div>
+              <BookingsTab bookings={bookings} houses={houses} servicesById={servicesById} reload={loadAll}/>
+            </div>
+          </div>
+        )}
         {tab==='houses' && <HousesTab houses={houses} services={services} reload={loadAll}/>}
         {tab==='services' && <ServicesTab services={services} houses={houses} reload={loadAll}/>}
       </div>
