@@ -19,7 +19,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root{ color-scheme: dark; }
   html,body{ height:100%; }
@@ -657,8 +657,12 @@ function guestsCount(b){
 
 const CHART_COLORS = ['#17a892','#5ad9c2','#f5b942','#f2784b','#7aa8f5','#c084fc','#f472b6','#94a3b8'];
 
-Chart.defaults.font.family = "'Golos Text', system-ui, sans-serif";
-Chart.defaults.color = '#8ea0b5';
+// Защита: если CDN с Chart.js не загрузился (сеть/блокировка), не роняем всю админку —
+// просто не рисуем графики, остальной интерфейс продолжает работать.
+if(window.Chart){
+  Chart.defaults.font.family = "'Golos Text', system-ui, sans-serif";
+  Chart.defaults.color = '#8ea0b5';
+}
 
 function ChartCanvas({ type, data, options, height }){
   const canvasRef = useRef(null);
@@ -667,7 +671,7 @@ function ChartCanvas({ type, data, options, height }){
   const optionsKey = JSON.stringify(options || {});
 
   useEffect(() => {
-    if(!canvasRef.current) return;
+    if(!canvasRef.current || !window.Chart) return;
     chartRef.current = new Chart(canvasRef.current, {
       type, data,
       options: {
@@ -683,6 +687,7 @@ function ChartCanvas({ type, data, options, height }){
     return () => { chartRef.current && chartRef.current.destroy(); };
   }, [dataKey, optionsKey, type]);
 
+  if(!window.Chart) return <div className="text-[11.5px] muted text-center py-6">График недоступен (не загрузилась библиотека графиков)</div>;
   return <div style={{ height: height || 220 }}><canvas ref={canvasRef}></canvas></div>;
 }
 
