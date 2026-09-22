@@ -20,6 +20,9 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <style>
   :root{ color-scheme: dark; }
   html,body{ height:100%; }
@@ -61,6 +64,66 @@ const STATUS_COLOR = { pending: 'bg-amber-400/20 text-amber-400 border-amber-400
 
 function Badge({ status }){
   return <span className={`text-[10.5px] px-2 py-0.5 rounded-full border ${STATUS_COLOR[status]}`}>{STATUS_LABEL[status] || status}</span>;
+}
+
+/* ---------------------------------------------------------------
+   Подарочные сертификаты — статусы + генерация PDF-сертификата
+--------------------------------------------------------------- */
+const CERT_STATUS_LABEL = { pending:'Ожидает', active:'Активен', redeemed:'Использован', expired:'Истёк', rejected:'Отклонён' };
+const CERT_STATUS_COLOR = {
+  pending:'bg-amber-400/20 text-amber-400 border-amber-400/30',
+  active:'bg-brand-500/20 text-brand-300 border-brand-500/30',
+  redeemed:'bg-sky-400/20 text-sky-300 border-sky-400/30',
+  expired:'bg-white/10 text-slate-400 border-white/15',
+  rejected:'bg-red-500/20 text-red-400 border-red-500/30',
+};
+function CertBadge({ status }){
+  return <span className={`text-[10.5px] px-2 py-0.5 rounded-full border ${CERT_STATUS_COLOR[status]}`}>{CERT_STATUS_LABEL[status] || status}</span>;
+}
+
+// Рисует сертификат как HTML-карточку вне экрана, растеризует в PNG (html2canvas)
+// и вставляет картинкой в PDF — так не нужно возиться со шрифтами с кириллицей в jsPDF.
+async function downloadCertificatePDF(cert, house){
+  const qr = qrcode(0, 'M');
+  qr.addData(cert.code);
+  qr.make();
+  const qrDataUrl = qr.createDataURL(8, 0);
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed; left:-9999px; top:0; width:1000px; height:650px;';
+  wrap.innerHTML = `
+    <div style="width:1000px;height:650px;box-sizing:border-box;padding:56px;
+      background:linear-gradient(160deg,#2B1F2E 0%,#1E1420 100%);
+      font-family:Georgia,'Times New Roman',serif;color:#F7F4EE;position:relative;overflow:hidden;">
+      <div style="position:absolute;inset:18px;border:1.5px solid rgba(232,145,107,0.55);border-radius:4px;"></div>
+      <div style="position:relative;">
+        <div style="font-size:12px;letter-spacing:4px;text-transform:uppercase;color:#E8916B;margin-bottom:10px;">Флот · Подарочный сертификат</div>
+        <div style="font-size:40px;font-weight:600;margin-bottom:6px;">${house ? house.name : ''}</div>
+        <div style="font-size:16px;color:#cbb9c2;margin-bottom:36px;">${cert.nights} ${cert.nights===1?'ночь':cert.nights<5?'ночи':'ночей'} отдыха на воде · оплачено полностью</div>
+
+        ${cert.recipient_note ? `<div style="font-size:18px;font-style:italic;color:#F0D8CE;margin-bottom:34px;max-width:620px;line-height:1.5;">«${cert.recipient_note.replace(/</g,'&lt;')}»</div>` : '<div style="height:34px;"></div>'}
+
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:20px;">
+          <div>
+            <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#9C8A91;margin-bottom:6px;">Код сертификата</div>
+            <div style="font-size:26px;letter-spacing:2px;font-weight:600;color:#E8916B;">${cert.code}</div>
+            <div style="font-size:12px;color:#9C8A91;margin-top:14px;">Действителен до ${cert.expires_at ? new Date(cert.expires_at).toLocaleDateString('ru-RU') : '—'}</div>
+          </div>
+          <img src="${qrDataUrl}" style="width:120px;height:120px;border-radius:8px;background:#fff;padding:8px;"/>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+
+  await new Promise(r => setTimeout(r, 60)); // дать картинке QR отрисоваться
+
+  const canvas = await html2canvas(wrap.firstElementChild, { scale: 2, backgroundColor: null });
+  document.body.removeChild(wrap);
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation:'landscape', unit:'px', format:[1000,650] });
+  doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, 1000, 650);
+  doc.save(`sertifikat-${cert.code}.pdf`);
 }
 
 /* ---------------------------------------------------------------
@@ -330,6 +393,164 @@ function BookingsTab({ bookings, houses, servicesById, onOpenBooking }){
                 </td>
                 <td><Badge status={b.status}/></td>
                 <td className="muted">{new Date(b.created_at).toLocaleDateString('ru-RU')}</td>
+              </tr>
+            ))}
+            {filtered.length===0 && <tr><td colSpan="8" className="text-center muted py-6">Ничего нет</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   Подарочные сертификаты
+--------------------------------------------------------------- */
+function CertificateDetailModal({ cert, houses, onClose, onSaved }){
+  const [note, setNote] = useState(cert.admin_note || '');
+  const [saving, setSaving] = useState('');
+  const house = houses.find(h => h.id === cert.house_id) || null;
+
+  async function confirmPayment(){
+    setSaving('active');
+    const expires = new Date(); expires.setFullYear(expires.getFullYear() + 1);
+    const { error } = await sb.from('certificates')
+      .update({ status: 'active', issued_at: new Date().toISOString(), expires_at: expires.toISOString(), admin_note: note })
+      .eq('id', cert.id);
+    setSaving('');
+    if(!error) onSaved();
+  }
+
+  async function reject(){
+    setSaving('rejected');
+    const { error } = await sb.from('certificates').update({ status: 'rejected', admin_note: note }).eq('id', cert.id);
+    setSaving('');
+    if(!error) onSaved();
+  }
+
+  async function markSent(){
+    setSaving('sent');
+    const { error } = await sb.from('certificates').update({ sent_at: new Date().toISOString(), admin_note: note }).eq('id', cert.id);
+    setSaving('');
+    if(!error) onSaved();
+  }
+
+  async function saveNoteOnly(){
+    setSaving('note');
+    const { error } = await sb.from('certificates').update({ admin_note: note }).eq('id', cert.id);
+    setSaving('');
+    if(!error) onSaved();
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-start md:items-center justify-center p-4 z-50 overflow-y-auto" onClick={onClose}>
+      <div className="modal-card rounded-2xl p-5 w-full max-w-lg my-6 max-h-[88vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-[16px] font-serif">Сертификат {cert.code}</div>
+          <CertBadge status={cert.status}/>
+        </div>
+        <div className="text-[11.5px] muted mb-4">Создан {new Date(cert.created_at).toLocaleString('ru-RU')}</div>
+
+        <div className="space-y-1.5 text-[12.5px] mb-4">
+          <div className="flex justify-between"><span className="muted">Домик</span><b>{house ? house.name : '—'}</b></div>
+          <div className="flex justify-between"><span className="muted">Ночей</span><b>{cert.nights}</b></div>
+          <div className="flex justify-between"><span className="muted">Номинал</span><b>{cert.amount} BYN</b></div>
+          <div className="flex justify-between"><span className="muted">Покупатель</span><b>{cert.buyer_name}</b></div>
+          <div className="flex justify-between"><span className="muted">Телефон</span><b>{cert.buyer_phone}</b></div>
+          <div className="flex justify-between"><span className="muted">E-mail</span><b>{cert.buyer_email}</b></div>
+          {cert.recipient_note && <div className="flex justify-between gap-3"><span className="muted">Надпись</span><b className="text-right">{cert.recipient_note}</b></div>}
+          {cert.expires_at && <div className="flex justify-between"><span className="muted">Действителен до</span><b>{new Date(cert.expires_at).toLocaleDateString('ru-RU')}</b></div>}
+          {cert.sent_at && <div className="flex justify-between"><span className="muted">Отправлен</span><b>{new Date(cert.sent_at).toLocaleString('ru-RU')}</b></div>}
+        </div>
+
+        {cert.paper_delivery && (
+          <div className="mb-4 text-[12px] bg-amber-400/10 border border-amber-400/25 rounded-lg px-3 py-2.5">
+            📮 Нужна бумажная версия по почте:<br/>
+            <b>{cert.delivery_address}</b>, индекс <b>{cert.delivery_zip}</b>
+          </div>
+        )}
+
+        {cert.receipt_screenshot && (
+          <div className="mb-4">
+            <div className="text-[12px] muted mb-1.5">Скриншот чека</div>
+            <a href={cert.receipt_screenshot} target="_blank">
+              <img src={cert.receipt_screenshot} className="receipt-thumb"/>
+            </a>
+          </div>
+        )}
+
+        <label className="text-[12px] muted block mb-1.5">Заметка администратора</label>
+        <textarea value={note} onChange={e=>setNote(e.target.value)} rows="2" className="field w-full rounded-lg px-3 py-2.5 text-[13px] mb-4"/>
+
+        {(cert.status === 'active' || cert.status === 'redeemed') && (
+          <button onClick={()=>downloadCertificatePDF(cert, house)}
+            className="w-full mb-2.5 field rounded-lg py-2.5 text-[13px] font-medium flex items-center justify-center gap-2">
+            ⬇ Скачать PDF сертификата
+          </button>
+        )}
+
+        {cert.status === 'pending' && (
+          <div className="flex gap-2 mb-2">
+            <button onClick={reject} disabled={!!saving} className="flex-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg py-2.5 text-[13px] font-medium flex items-center justify-center gap-2">
+              {saving==='rejected' && <span className="spinner"></span>} Отклонить
+            </button>
+            <button onClick={confirmPayment} disabled={!!saving} className="flex-1 bg-brand-500 hover:bg-brand-400 text-white rounded-lg py-2.5 text-[13px] font-medium flex items-center justify-center gap-2">
+              {saving==='active' && <span className="spinner"></span>} Подтвердить оплату
+            </button>
+          </div>
+        )}
+
+        {cert.status === 'active' && !cert.sent_at && (
+          <button onClick={markSent} disabled={!!saving} className="w-full mb-2 bg-brand-500 hover:bg-brand-400 text-white rounded-lg py-2.5 text-[13px] font-medium flex items-center justify-center gap-2">
+            {saving==='sent' && <span className="spinner"></span>} Отметить «сертификат отправлен покупателю»
+          </button>
+        )}
+
+        <button onClick={saveNoteOnly} disabled={!!saving} className="w-full field rounded-lg py-2.5 text-[13px] flex items-center justify-center gap-2">
+          {saving==='note' && <span className="spinner"></span>} Сохранить заметку
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CertificatesTab({ certificates, houses, onOpenCert }){
+  const [filter, setFilter] = useState('all');
+  const houseName = id => (houses.find(h=>h.id===id) || {}).name || '—';
+
+  const filtered = useMemo(() => {
+    if(filter === 'all') return certificates;
+    return certificates.filter(c => c.status === filter);
+  }, [certificates, filter]);
+
+  const pendingCount = certificates.filter(c=>c.status==='pending').length;
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        {['all','pending','active','redeemed','expired','rejected'].map(f => (
+          <button key={f} onClick={()=>setFilter(f)}
+            className={`text-[12px] px-3 py-1.5 rounded-full border ${filter===f ? 'bg-brand-500 border-brand-500 text-white' : 'field'}`}>
+            {f==='all' ? 'Все' : CERT_STATUS_LABEL[f]}{f==='pending' && pendingCount>0 ? ` (${pendingCount})` : ''}
+          </button>
+        ))}
+      </div>
+      <div className="card rounded-xl overflow-x-auto">
+        <table>
+          <thead><tr>
+            <th>Код</th><th>Домик</th><th>Ночей</th><th>Номинал</th><th>Покупатель</th><th>Почта</th><th>Статус</th><th>Создан</th>
+          </tr></thead>
+          <tbody>
+            {filtered.map(c => (
+              <tr key={c.id} className="clickable" onClick={()=>onOpenCert(c)}>
+                <td className="num">{c.code}</td>
+                <td>{houseName(c.house_id)}</td>
+                <td>{c.nights}</td>
+                <td>{c.amount} BYN</td>
+                <td>{c.buyer_name}</td>
+                <td>{c.paper_delivery ? '📮 бумажный' : '—'}</td>
+                <td><CertBadge status={c.status}/></td>
+                <td className="muted">{new Date(c.created_at).toLocaleDateString('ru-RU')}</td>
               </tr>
             ))}
             {filtered.length===0 && <tr><td colSpan="8" className="text-center muted py-6">Ничего нет</td></tr>}
@@ -950,22 +1171,26 @@ function Dashboard({ session, onLogout }){
   const [bookings, setBookings] = useState([]);
   const [houses, setHouses] = useState([]);
   const [services, setServices] = useState([]);
+  const [certificates, setCertificates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(null);
   const [selectedBooking, setSelectedBooking] = useState(null);
+  const [selectedCert, setSelectedCert] = useState(null);
   const servicesById = useMemo(() => Object.fromEntries(services.map(s => [s.slug, s])), [services]);
 
   async function loadAll(){
-    const [{ data: adm }, { data: bk }, { data: hs }, { data: sv }] = await Promise.all([
+    const [{ data: adm }, { data: bk }, { data: hs }, { data: sv }, { data: cr }] = await Promise.all([
       sb.from('admin_users').select('*').eq('user_id', session.user.id).maybeSingle(),
       sb.from('bookings').select('*').order('created_at', { ascending: false }),
       sb.from('houses').select('*').order('sort_order'),
       sb.from('services').select('*').order('sort_order'),
+      sb.from('certificates').select('*').order('created_at', { ascending: false }),
     ]);
     setIsAdmin(!!adm);
     setBookings(bk || []);
     setHouses(hs || []);
     setServices(sv || []);
+    setCertificates(cr || []);
     setLoading(false);
   }
 
@@ -1000,8 +1225,8 @@ function Dashboard({ session, onLogout }){
         <KpiCards bookings={bookings}/>
 
         <div className="flex items-center justify-between gap-2 mb-5">
-          <div className="flex gap-2">
-            {[['calendar','Календарь'],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
+          <div className="flex gap-2 flex-wrap">
+            {[['calendar','Календарь'],['certificates',`Сертификаты${certificates.filter(c=>c.status==='pending').length ? ` (${certificates.filter(c=>c.status==='pending').length})` : ''}`],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
               <button key={k} onClick={()=>setTab(k)} className={`text-[13px] px-4 py-2 rounded-lg border ${tab===k ? 'bg-brand-500 border-brand-500 text-white' : 'field'}`}>{l}</button>
             ))}
           </div>
@@ -1017,6 +1242,7 @@ function Dashboard({ session, onLogout }){
             </div>
           </div>
         )}
+        {tab==='certificates' && <CertificatesTab certificates={certificates} houses={houses} onOpenCert={setSelectedCert}/>}
         {tab==='analytics' && <AnalyticsTab bookings={bookings} houses={houses} servicesById={servicesById}/>}
         {tab==='houses' && <HousesTab houses={houses} services={services} reload={loadAll}/>}
         {tab==='services' && <ServicesTab services={services} houses={houses} reload={loadAll}/>}
@@ -1027,6 +1253,13 @@ function Dashboard({ session, onLogout }){
           booking={selectedBooking} houses={houses} servicesById={servicesById}
           onClose={()=>setSelectedBooking(null)}
           onSaved={()=>{ setSelectedBooking(null); loadAll(); }}
+        />
+      )}
+      {selectedCert && (
+        <CertificateDetailModal
+          cert={selectedCert} houses={houses}
+          onClose={()=>setSelectedCert(null)}
+          onSaved={()=>{ setSelectedCert(null); loadAll(); }}
         />
       )}
     </div>
