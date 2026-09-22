@@ -830,6 +830,44 @@ function ServiceRow({ s, houses, onSaved }){
   );
 }
 
+function SettingsTab({ settings, reload }){
+  const [paymentLink, setPaymentLink] = useState(settings.payment_link || '');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => { setPaymentLink(settings.payment_link || ''); }, [settings.payment_link]);
+
+  async function save(){
+    setSaving(true); setSaved(false);
+    const { error } = await sb.from('booking_settings').upsert({ key: 'payment_link', value: paymentLink.trim() });
+    setSaving(false);
+    if(!error){ setSaved(true); reload(); setTimeout(() => setSaved(false), 2000); }
+    else alert(error.message);
+  }
+
+  return (
+    <div className="card rounded-xl p-5 max-w-xl space-y-3">
+      <div>
+        <div className="text-[15px] font-serif mb-1">Ссылка на оплату</div>
+        <p className="text-[12.5px] muted mb-3">Показывается гостю рядом с QR-кодом кнопкой «Оплатить по ссылке» на всех экранах оплаты (бронирование, сертификат, доплата). Оставьте поле пустым, чтобы кнопку не показывать.</p>
+      </div>
+      <input
+        type="url"
+        value={paymentLink}
+        onChange={e => setPaymentLink(e.target.value)}
+        placeholder="https://raschet.by/..."
+        className="field w-full rounded-lg px-3 py-2.5 text-[13px]"
+      />
+      <div className="flex items-center gap-3">
+        <button onClick={save} disabled={saving} className="rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-[13px] font-semibold px-4 py-2.5 disabled:opacity-50">
+          {saving ? 'Сохраняю…' : 'Сохранить'}
+        </button>
+        {saved && <span className="text-[12.5px] text-brand-300">Сохранено</span>}
+      </div>
+    </div>
+  );
+}
+
 function ServicesTab({ services, houses, reload }){
   const [newOpen, setNewOpen] = useState(false);
   const [slug, setSlug] = useState('');
@@ -1180,6 +1218,7 @@ function Dashboard({ session, onLogout }){
   const [houses, setHouses] = useState([]);
   const [services, setServices] = useState([]);
   const [certificates, setCertificates] = useState([]);
+  const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(null);
   const [selectedBooking, setSelectedBooking] = useState(null);
@@ -1187,18 +1226,20 @@ function Dashboard({ session, onLogout }){
   const servicesById = useMemo(() => Object.fromEntries(services.map(s => [s.slug, s])), [services]);
 
   async function loadAll(){
-    const [{ data: adm }, { data: bk }, { data: hs }, { data: sv }, { data: cr }] = await Promise.all([
+    const [{ data: adm }, { data: bk }, { data: hs }, { data: sv }, { data: cr }, { data: st }] = await Promise.all([
       sb.from('admin_users').select('*').eq('user_id', session.user.id).maybeSingle(),
       sb.from('bookings').select('*').order('created_at', { ascending: false }),
       sb.from('houses').select('*').order('sort_order'),
       sb.from('services').select('*').order('sort_order'),
       sb.from('certificates').select('*').order('created_at', { ascending: false }),
+      sb.from('booking_settings').select('key,value'),
     ]);
     setIsAdmin(!!adm);
     setBookings(bk || []);
     setHouses(hs || []);
     setServices(sv || []);
     setCertificates(cr || []);
+    setSettings(Object.fromEntries((st || []).map(r => [r.key, r.value])));
     setLoading(false);
   }
 
@@ -1234,7 +1275,7 @@ function Dashboard({ session, onLogout }){
 
         <div className="flex items-center justify-between gap-2 mb-5">
           <div className="flex gap-2 flex-wrap">
-            {[['calendar','Календарь'],['certificates',`Сертификаты${certificates.filter(c=>c.status==='pending').length ? ` (${certificates.filter(c=>c.status==='pending').length})` : ''}`],['houses','Домики'],['services','Услуги']].map(([k,l]) => (
+            {[['calendar','Календарь'],['certificates',`Сертификаты${certificates.filter(c=>c.status==='pending').length ? ` (${certificates.filter(c=>c.status==='pending').length})` : ''}`],['houses','Домики'],['services','Услуги'],['settings','Настройки']].map(([k,l]) => (
               <button key={k} onClick={()=>setTab(k)} className={`text-[13px] px-4 py-2 rounded-lg border ${tab===k ? 'bg-brand-500 border-brand-500 text-white' : 'field'}`}>{l}</button>
             ))}
           </div>
@@ -1252,6 +1293,7 @@ function Dashboard({ session, onLogout }){
         )}
         {tab==='certificates' && <CertificatesTab certificates={certificates} houses={houses} onOpenCert={setSelectedCert}/>}
         {tab==='analytics' && <AnalyticsTab bookings={bookings} houses={houses} servicesById={servicesById}/>}
+        {tab==='settings' && <SettingsTab settings={settings} reload={loadAll}/>}
         {tab==='houses' && <HousesTab houses={houses} services={services} reload={loadAll}/>}
         {tab==='services' && <ServicesTab services={services} houses={houses} reload={loadAll}/>}
       </div>

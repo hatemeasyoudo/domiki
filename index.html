@@ -739,7 +739,7 @@ function ReceiptUploadExisting({ booking, houses, onDone, onBack }){
 /* ---------------------------------------------------------------
    Шаг 2 — оплата новой брони
 --------------------------------------------------------------- */
-function QrPayment({ booking, onConfirm, onBack }){
+function QrPayment({ booking, onConfirm, onBack, paymentLink }){
   const [receiptFile, setReceiptFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -821,6 +821,12 @@ function QrPayment({ booking, onConfirm, onBack }){
           <rect x="0" y="134" width="34" height="34" fill="none" stroke="#1E1420" strokeWidth="6"/>
         </svg>
         <div className="text-[24px] font-serif mt-3">{booking.prepayment_amount} BYN</div>
+        {paymentLink && (
+          <a href={paymentLink} target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-brand-500 hover:bg-brand-600 text-white text-[13px] font-semibold px-5 py-2.5 transition-colors">
+            Оплатить по ссылке
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M7 17L17 7M17 7H9M17 7v8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </a>
+        )}
         <p className="text-[11.5px] muted mt-3 max-w-xs">QR — демонстрационный. Подключите реальный платёжный QR перед запуском сайта.</p>
       </div>
 
@@ -948,7 +954,7 @@ function CertificateBooking({ booking, onDone, onError }){
    администратору как обычная заявка, сертификат списывается сразу
    (при отклонении брони администратор вернёт сертификат вручную).
 --------------------------------------------------------------- */
-function CertificateTopupPayment({ booking, onConfirm, onBack }){
+function CertificateTopupPayment({ booking, onConfirm, onBack, paymentLink }){
   const [receiptFile, setReceiptFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -1045,6 +1051,12 @@ function CertificateTopupPayment({ booking, onConfirm, onBack }){
           <rect x="0" y="134" width="34" height="34" fill="none" stroke="#1E1420" strokeWidth="6"/>
         </svg>
         <div className="text-[24px] font-serif mt-3">{booking.certTopup} BYN</div>
+        {paymentLink && (
+          <a href={paymentLink} target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-brand-500 hover:bg-brand-600 text-white text-[13px] font-semibold px-5 py-2.5 transition-colors">
+            Оплатить по ссылке
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M7 17L17 7M17 7H9M17 7v8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </a>
+        )}
         <p className="text-[11.5px] muted mt-3 max-w-xs">QR — демонстрационный. Подключите реальный платёжный QR перед запуском сайта.</p>
       </div>
 
@@ -1211,7 +1223,7 @@ function GiftForm({ houses, onSubmit, onBack }){
 /* ---------------------------------------------------------------
    Подарочный сертификат — шаг 2: оплата (тот же QR, без даты)
 --------------------------------------------------------------- */
-function GiftQrPayment({ gift, onConfirm, onBack }){
+function GiftQrPayment({ gift, onConfirm, onBack, paymentLink }){
   const [receiptFile, setReceiptFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -1289,6 +1301,12 @@ function GiftQrPayment({ gift, onConfirm, onBack }){
           <rect x="0" y="134" width="34" height="34" fill="none" stroke="#1E1420" strokeWidth="6"/>
         </svg>
         <div className="text-[24px] font-serif mt-3">{gift.amount} BYN</div>
+        {paymentLink && (
+          <a href={paymentLink} target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-brand-500 hover:bg-brand-600 text-white text-[13px] font-semibold px-5 py-2.5 transition-colors">
+            Оплатить по ссылке
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M7 17L17 7M17 7H9M17 7v8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </a>
+        )}
         <p className="text-[11.5px] muted mt-3 max-w-xs">QR — демонстрационный. Подключите реальный платёжный QR перед запуском сайта.</p>
       </div>
 
@@ -1374,6 +1392,7 @@ function App(){
   const [giftData, setGiftData] = useState(null);
   const [houses, setHouses] = useState([]);
   const [services, setServices] = useState([]);
+  const [paymentLink, setPaymentLink] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
 
@@ -1384,13 +1403,15 @@ function App(){
 
   useEffect(() => {
     (async () => {
-      const [{ data: hs, error: hErr }, { data: sv, error: sErr }] = await Promise.all([
+      const [{ data: hs, error: hErr }, { data: sv, error: sErr }, { data: st }] = await Promise.all([
         sb.from('houses').select('*').eq('active', true).order('sort_order'),
         sb.from('services').select('*').eq('active', true).order('sort_order'),
+        sb.from('booking_settings').select('key,value').eq('key', 'payment_link').maybeSingle(),
       ]);
       if(hErr || sErr){ setLoadError('Не удалось загрузить данные. Проверьте подключение к базе.'); }
       setHouses(hs || []);
       setServices(sv || []);
+      setPaymentLink((st && st.value) || '');
       setLoading(false);
     })();
   }, []);
@@ -1463,13 +1484,13 @@ function App(){
             <ReceiptUploadExisting booking={foundBooking} houses={houses} onDone={handleUploadDone} onBack={()=>setStep('find')} />
           )}
           {flow === 'booking' && step === 'payment' && bookingData && (
-            <QrPayment booking={bookingData} onConfirm={handlePaymentConfirm} onBack={()=>setStep('form')} />
+            <QrPayment booking={bookingData} onConfirm={handlePaymentConfirm} onBack={()=>setStep('form')} paymentLink={paymentLink} />
           )}
           {flow === 'booking' && step === 'cert-processing' && bookingData && (
             <CertificateBooking booking={bookingData} onDone={handleCertDone} onError={handleCertError} />
           )}
           {flow === 'booking' && step === 'cert-topup' && bookingData && (
-            <CertificateTopupPayment booking={bookingData} onConfirm={handleCertTopupConfirm} onBack={()=>setStep('form')} />
+            <CertificateTopupPayment booking={bookingData} onConfirm={handleCertTopupConfirm} onBack={()=>setStep('form')} paymentLink={paymentLink} />
           )}
           {flow === 'booking' && step === 'success' && bookingData && (
             <BookingSuccess booking={bookingData} hasReceipt={hasReceipt} onReset={reset} />
@@ -1479,7 +1500,7 @@ function App(){
             <GiftForm houses={houses} onSubmit={handleGiftFormSubmit} onBack={()=>switchFlow('booking')} />
           )}
           {flow === 'gift' && step === 'gift-payment' && giftData && (
-            <GiftQrPayment gift={giftData} onConfirm={handleGiftPaymentConfirm} onBack={()=>setStep('gift-form')} />
+            <GiftQrPayment gift={giftData} onConfirm={handleGiftPaymentConfirm} onBack={()=>setStep('gift-form')} paymentLink={paymentLink} />
           )}
           {flow === 'gift' && step === 'gift-success' && giftData && (
             <GiftSuccess gift={giftData} onReset={resetGift} />
