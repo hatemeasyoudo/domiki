@@ -361,6 +361,10 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
     && new Date(certData.expires_at) > new Date()
     && certData.house_id === house.id
     && certData.nights === days);
+  // Сертификат покупался по будним ценам; если выбранные даты попадают на
+  // выходные (дороже) или добавлены платные услуги — разницу нужно доплатить.
+  // Если наоборот дешевле — сдача не выдаётся (сертификат просто использован).
+  const certTopup = certMatches ? Math.max(0, grandTotal - certData.amount) : 0;
 
   async function checkCertificate(){
     setCertError(''); setCertData(null);
@@ -408,7 +412,7 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
       check_in: range.checkIn, check_out: range.checkOut,
       services: selectedServices, guests: guestCount, lifeJacketQty: (lifeJacketSlug && perPersonQty[lifeJacketSlug]) || 0,
       prepayment_amount: prepayment, stayTotal, servicesTotal, grandTotal, days, breakdown,
-      viaCertificate: certMatches, certificateCode: certMatches ? certCode.trim() : null,
+      viaCertificate: certMatches, certificateCode: certMatches ? certCode.trim() : null, certTopup,
     });
   }
 
@@ -582,8 +586,17 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
           </div>
 
           {certMatches ? (
-            <div className="rounded-lg p-3 border border-brand-500/30 bg-brand-500/[0.06] text-[13px]">
-              Оплачено сертификатом <b>{certCode.trim()}</b> · к оплате <b>0 BYN</b>
+            <div className="rounded-lg p-3 border border-brand-500/30 bg-brand-500/[0.06] text-[13px] space-y-1">
+              <div>Оплачено сертификатом <b>{certCode.trim()}</b> · номинал <b>{certData.amount} BYN</b></div>
+              {certTopup > 0 ? (
+                <div className="text-amber-400">
+                  Выбранные даты и услуги стоят {grandTotal} BYN — сертификат не покрывает разницу
+                  {stayTotal > certData.amount ? ' (выходные дороже будних дней)' : ''}.
+                  Доплата: <b>{certTopup} BYN</b>
+                </div>
+              ) : (
+                <div className="text-brand-300">К оплате: <b>0 BYN</b>{grandTotal < certData.amount ? ' · остаток сертификата не возвращается' : ''}</div>
+              )}
             </div>
           ) : (
             <div>
@@ -600,7 +613,7 @@ function BookingForm({ houses, servicesById, onSubmit, onFindBooking }){
           <button onClick={handleSubmit} disabled={submitting}
             className="w-full bg-brand-500 hover:bg-brand-400 disabled:opacity-60 text-white rounded-lg py-3 text-[14px] font-semibold transition flex items-center justify-center gap-2">
             {submitting && <span className="spinner"></span>}
-            {certMatches ? 'Забронировать по сертификату' : 'Перейти к оплате'}
+            {certMatches ? (certTopup > 0 ? 'Перейти к доплате' : 'Забронировать по сертификату') : 'Перейти к оплате'}
           </button>
         </div>
       )}
@@ -929,13 +942,146 @@ function CertificateBooking({ booking, onDone, onError }){
 }
 
 /* ---------------------------------------------------------------
+   Бронирование по сертификату с доплатой — даты попали на выходные
+   (дороже) и/или добавлены услуги, сертификат не покрывает разницу
+   полностью. Доплата — тем же QR + чек, бронь уходит на проверку
+   администратору как обычная заявка, сертификат списывается сразу
+   (при отклонении брони администратор вернёт сертификат вручную).
+--------------------------------------------------------------- */
+function CertificateTopupPayment({ booking, onConfirm, onBack }){
+  const [receiptFile, setReceiptFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  function handleFile(e){
+    const f = e.target.files[0];
+    if(!f) return;
+    setReceiptFile(f);
+    const reader = new FileReader();
+    reader.onload = () => setPreview(reader.result);
+    reader.readAsDataURL(f);
+  }
+
+  async function submit(withReceipt){
+    setSubmitting(true); setError('');
+    try{
+      let receiptUrl = null;
+      if(withReceipt && receiptFile){
+        const path = `topup-${Date.now()}-${receiptFile.name}`;
+        const { error: upErr } = await sb.storage.from('receipts').upload(path, receiptFile);
+        if(upErr) throw upErr;
+        const { data: pub } = sb.storage.from('receipts').getPublicUrl(path);
+        receiptUrl = pub.publicUrl;
+      }
+
+      const { data: inserted, error: insErr } = await sb.from('bookings').insert({
+        house_id: booking.house_id,
+        guest_name: booking.guest_name,
+        phone: booking.phone,
+        telegram: booking.telegram || null,
+        check_in: booking.check_in,
+        check_out: booking.check_out,
+        prepayment_amount: booking.certTopup,
+        receipt_screenshot: receiptUrl,
+        admin_note: `Сертификат ${booking.certificateCode} (${booking.grandTotal - booking.certTopup} BYN) + доплата ${booking.certTopup} BYN`,
+        services: booking.services,
+        life_jacket_count: booking.lifeJacketQty,
+        guests: Array.from({length: booking.guests || 0}).map(() => ({})),
+        stay_total: booking.stayTotal,
+        services_total: booking.servicesTotal,
+        grand_total: booking.grandTotal,
+        services_breakdown: booking.breakdown || [],
+      }).select().single();
+
+      if(insErr){
+        setSubmitting(false);
+        return setError(insErr.code === '23P01'
+          ? 'Кто-то только что забронировал эти даты. Вернитесь назад и выберите другие.'
+          : (insErr.message || 'Не удалось отправить заявку.'));
+      }
+
+      const { data: ok, error: redErr } = await sb.rpc('redeem_certificate', {
+        p_code: booking.certificateCode,
+        p_booking_id: inserted.id,
+        p_house_id: booking.house_id,
+        p_nights: booking.days,
+      });
+
+      if(redErr || !ok){
+        await sb.from('bookings').delete().eq('id', inserted.id);
+        setSubmitting(false);
+        return setError(redErr?.message || 'Не удалось списать сертификат. Возможно, он уже использован.');
+      }
+
+      setSubmitting(false);
+      onConfirm(!!receiptUrl);
+    } catch(e){
+      setSubmitting(false);
+      setError(e.message || 'Не удалось отправить заявку. Попробуйте ещё раз.');
+    }
+  }
+
+  return (
+    <div className="space-y-5 fade-in">
+      <button onClick={onBack} className="text-[12.5px] muted hover:text-brand-500">← Назад к форме</button>
+
+      <div className="card rounded-xl p-4 space-y-1.5 text-[12.5px]">
+        <div className="flex justify-between"><span className="muted">Домик</span><b>{booking.houseName}</b></div>
+        <div className="flex justify-between"><span className="muted">Даты</span><b>{booking.check_in} → {booking.check_out}</b></div>
+        <div className="flex justify-between"><span className="muted">Сертификат</span><b>{booking.certificateCode}</b></div>
+        <div className="flex justify-between pt-1.5 mt-1.5 border-t border-white/10 text-[14px]"><span>Доплата</span><b className="text-brand-300">{booking.certTopup} BYN</b></div>
+      </div>
+
+      <div className="card rounded-xl p-5 flex flex-col items-center text-center">
+        <div className="text-[12.5px] muted mb-3">Отсканируйте QR в приложении банка или на raschet.by</div>
+        <svg width="168" height="168" viewBox="0 0 168 168" className="rounded-lg bg-white p-2">
+          {Array.from({length: 12}).map((_,r) => Array.from({length:12}).map((_,c) => (
+            ((r*7+c*13+ (booking.certTopup||0)) % 5 === 0) &&
+            <rect key={r+'-'+c} x={c*14} y={r*14} width="12" height="12" fill="#0b1420"/>
+          )))}
+          <rect x="0" y="0" width="34" height="34" fill="none" stroke="#0b1420" strokeWidth="6"/>
+          <rect x="134" y="0" width="34" height="34" fill="none" stroke="#0b1420" strokeWidth="6"/>
+          <rect x="0" y="134" width="34" height="34" fill="none" stroke="#0b1420" strokeWidth="6"/>
+        </svg>
+        <div className="text-[24px] font-serif mt-3">{booking.certTopup} BYN</div>
+        <p className="text-[11.5px] muted mt-3 max-w-xs">QR — демонстрационный. Подключите реальный платёжный QR перед запуском сайта.</p>
+      </div>
+
+      <div>
+        <label className="text-[12px] muted block mb-1.5">Скриншот чека об оплате доплаты</label>
+        <input type="file" accept="image/*" onChange={handleFile} className="hidden" id="topup-receipt-input"/>
+        <label htmlFor="topup-receipt-input" className="field w-full rounded-lg px-3 py-2.5 text-[13px] flex items-center justify-between cursor-pointer">
+          <span className="muted">{receiptFile ? receiptFile.name : 'Выберите файл…'}</span>
+          <span className="text-brand-300 text-[12px]">Загрузить</span>
+        </label>
+        {preview && <img src={preview} alt="Чек" className="mt-2 rounded-lg max-h-40 border border-white/10"/>}
+      </div>
+
+      {error && <div className="text-[12.5px] text-red-400">{error}</div>}
+
+      <div className="space-y-2.5">
+        <button onClick={() => submit(true)} disabled={submitting || !receiptFile}
+          className="w-full bg-brand-500 hover:bg-brand-400 disabled:opacity-40 text-white rounded-lg py-3 text-[14px] font-semibold transition flex items-center justify-center gap-2">
+          {submitting && <span className="spinner"></span>} Я оплатил доплату — отправить заявку
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
    Подарочный сертификат — шаг 1: выбор домика и числа ночей
 --------------------------------------------------------------- */
 function GiftForm({ houses, onSubmit, onBack }){
+  // Сертификат дарит только двухместный домик — так проще держать номинал
+  // предсказуемым (и это единственный вариант для романтического подарка).
+  const giftableHouses = houses.filter(h => h.type === 'two_seater');
   const [houseId, setHouseId] = useState(null);
   const [nights, setNights] = useState(2);
   const [buyerName, setBuyerName] = useState('');
   const [buyerPhone, setBuyerPhone] = useState('');
+  const [buyerTelegram, setBuyerTelegram] = useState('');
   const [buyerEmail, setBuyerEmail] = useState('');
   const [recipientNote, setRecipientNote] = useState('');
   const [paperDelivery, setPaperDelivery] = useState(false);
@@ -943,7 +1089,11 @@ function GiftForm({ houses, onSubmit, onBack }){
   const [deliveryZip, setDeliveryZip] = useState('');
   const [error, setError] = useState('');
 
-  const house = houses.find(h => h.id === houseId) || null;
+  useEffect(() => {
+    if(!houseId && giftableHouses.length === 1) setHouseId(giftableHouses[0].id);
+  }, [giftableHouses.length]);
+
+  const house = giftableHouses.find(h => h.id === houseId) || null;
   const amount = certificateAmount(house, nights);
 
   function handleSubmit(){
@@ -957,7 +1107,7 @@ function GiftForm({ houses, onSubmit, onBack }){
 
     onSubmit({
       house_id: house.id, houseName: house.name, nights, amount,
-      buyer_name: buyerName, buyer_phone: buyerPhone, buyer_email: buyerEmail,
+      buyer_name: buyerName, buyer_phone: buyerPhone, buyer_telegram: buyerTelegram, buyer_email: buyerEmail,
       recipient_note: recipientNote,
       paper_delivery: paperDelivery, delivery_address: paperDelivery ? deliveryAddress : null, delivery_zip: paperDelivery ? deliveryZip : null,
     });
@@ -967,13 +1117,14 @@ function GiftForm({ houses, onSubmit, onBack }){
     <div className="space-y-5">
       <div className="text-[12.5px] muted">
         Дарите отдых на воде — родителям, молодожёнам или друзьям. Сертификат оплачивает
-        проживание в выбранном домике полностью; получатель сам выберет удобные даты.
+        проживание в двухместном домике полностью; получатель сам выберет удобные даты.
+        Если выбранные даты выпадут на выходные (дороже будних) — доплата разницы потребуется при бронировании.
       </div>
 
       <div>
-        <div className="text-[13px] font-semibold mb-2.5">Какой домик дарим</div>
-        <div className="grid grid-cols-2 gap-2.5">
-          {houses.map(h => (
+        <div className="text-[13px] font-semibold mb-2.5">Домик</div>
+        <div className="grid grid-cols-1 gap-2.5">
+          {giftableHouses.map(h => (
             <button key={h.id} onClick={() => setHouseId(h.id)}
               className={`text-left rounded-xl border px-3.5 py-3 transition ${houseId===h.id ? 'border-brand-500 bg-brand-500/10' : 'border-white/10 hover:border-white/25 field'}`}>
               <div className="text-[13.5px] font-medium">{h.name}</div>
@@ -1007,9 +1158,15 @@ function GiftForm({ houses, onSubmit, onBack }){
               <input value={buyerPhone} onChange={e=>setBuyerPhone(e.target.value)} placeholder="+375 (29) 123-45-67" className="field w-full rounded-lg px-3 py-2.5 text-[13.5px]"/>
             </div>
           </div>
-          <div>
-            <label className="text-[12px] muted block mb-1.5">E-mail — на него пришлём сертификат после подтверждения оплаты</label>
-            <input value={buyerEmail} onChange={e=>setBuyerEmail(e.target.value)} placeholder="you@mail.com" className="field w-full rounded-lg px-3 py-2.5 text-[13.5px]"/>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-[12px] muted block mb-1.5">Telegram (необязательно)</label>
+              <input value={buyerTelegram} onChange={e=>setBuyerTelegram(e.target.value)} placeholder="@username" className="field w-full rounded-lg px-3 py-2.5 text-[13.5px]"/>
+            </div>
+            <div>
+              <label className="text-[12px] muted block mb-1.5">E-mail — на него пришлём сертификат</label>
+              <input value={buyerEmail} onChange={e=>setBuyerEmail(e.target.value)} placeholder="you@mail.com" className="field w-full rounded-lg px-3 py-2.5 text-[13.5px]"/>
+            </div>
           </div>
           <div>
             <label className="text-[12px] muted block mb-1.5">Надпись на сертификате «Кому / От кого» (необязательно)</label>
@@ -1089,6 +1246,7 @@ function GiftQrPayment({ gift, onConfirm, onBack }){
           amount: gift.amount,
           buyer_name: gift.buyer_name,
           buyer_phone: gift.buyer_phone,
+          buyer_telegram: gift.buyer_telegram || null,
           buyer_email: gift.buyer_email,
           recipient_note: gift.recipient_note || null,
           receipt_screenshot: pub.publicUrl,
@@ -1183,7 +1341,7 @@ function GiftSuccess({ gift, onReset }){
    Оркестратор
 --------------------------------------------------------------- */
 function StepIndicator({ step }){
-  const map = { form:0, payment:1, success:2, find:0, upload:1 };
+  const map = { form:0, payment:1, success:2, find:0, upload:1, 'cert-processing':1, 'cert-topup':1 };
   const idx = map[step] ?? 0;
   const steps = ['Данные','Оплата','Готово'];
   return (
@@ -1241,9 +1399,11 @@ function App(){
 
   function handleFormSubmit(data){
     setBookingData(data);
-    setStep(data.viaCertificate ? 'cert-processing' : 'payment');
+    if(data.viaCertificate) setStep(data.certTopup > 0 ? 'cert-topup' : 'cert-processing');
+    else setStep('payment');
   }
   function handlePaymentConfirm(receiptUploaded){ setHasReceipt(receiptUploaded); setStep('success'); }
+  function handleCertTopupConfirm(receiptUploaded){ setHasReceipt(receiptUploaded); setStep('success'); }
   function handleFoundBookingPick(b){ setFoundBooking(b); setStep('upload'); }
   function handleUploadDone(){ setBookingData({ ...foundBooking, houseName: (houses.find(h=>h.id===foundBooking.house_id)||{}).name }); setHasReceipt(true); setStep('success'); }
   function handleCertDone(){ setHasReceipt(true); setCertBookingError(''); setStep('success'); }
@@ -1307,6 +1467,9 @@ function App(){
           )}
           {flow === 'booking' && step === 'cert-processing' && bookingData && (
             <CertificateBooking booking={bookingData} onDone={handleCertDone} onError={handleCertError} />
+          )}
+          {flow === 'booking' && step === 'cert-topup' && bookingData && (
+            <CertificateTopupPayment booking={bookingData} onConfirm={handleCertTopupConfirm} onBack={()=>setStep('form')} />
           )}
           {flow === 'booking' && step === 'success' && bookingData && (
             <BookingSuccess booking={bookingData} hasReceipt={hasReceipt} onReset={reset} />
