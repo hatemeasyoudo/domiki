@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Флот — панель администратора</title>
+<title>Плавучий домик — панель администратора</title>
 <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=Playfair+Display:wght@500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
@@ -97,7 +97,7 @@ async function downloadCertificatePDF(cert, house){
       font-family:Georgia,'Times New Roman',serif;color:#F7F4EE;position:relative;overflow:hidden;">
       <div style="position:absolute;inset:18px;border:1.5px solid rgba(232,145,107,0.55);border-radius:4px;"></div>
       <div style="position:relative;">
-        <div style="font-size:12px;letter-spacing:4px;text-transform:uppercase;color:#E8916B;margin-bottom:10px;">Флот · Подарочный сертификат</div>
+        <div style="font-size:12px;letter-spacing:4px;text-transform:uppercase;color:#E8916B;margin-bottom:10px;">Плавучий домик · Подарочный сертификат</div>
         <div style="font-size:40px;font-weight:600;margin-bottom:6px;">${house ? house.name : ''}</div>
         <div style="font-size:16px;color:#cbb9c2;margin-bottom:36px;">${cert.nights} ${cert.nights===1?'ночь':cert.nights<5?'ночи':'ночей'} отдыха на воде · оплачено полностью</div>
 
@@ -150,7 +150,7 @@ function Login({ onLoggedIn }){
         <div className="text-center mb-2">
           <div className="w-11 h-11 rounded-2xl bg-brand-500/15 border border-brand-500/40 flex items-center justify-center mx-auto mb-3 text-[19px]">⚓</div>
           <h1 className="font-serif text-[20px]">Панель администратора</h1>
-          <p className="text-[12px] muted mt-1">Флот — домики на воде</p>
+          <p className="text-[12px] muted mt-1">Плавучий домик — домики на воде</p>
         </div>
         <div>
           <label className="text-[12px] muted block mb-1.5">Почта</label>
